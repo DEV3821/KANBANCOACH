@@ -40,65 +40,65 @@
 
 ### Read-only / Status Commands
 ```powershell
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli --help
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli coach-status      # Pipeline status dashboard
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli local-ai-status    # Qwen/Ollama health (16 checks)
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli evidence-status    # Evidence pipeline deps
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli ollama-doctor      # Ollama endpoint check
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli kanban-doctor      # Kanban source paths
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli --help
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli coach-status      # Pipeline status dashboard
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli local-ai-status    # Qwen/Ollama health (16 checks)
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli evidence-status    # Evidence pipeline deps
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli ollama-doctor      # Ollama endpoint check
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli kanban-doctor      # Kanban source paths
 ```
 
 ### Read-only View Commands
 ```powershell
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-cards
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-stale-cards
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-drafts
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-review-queue
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-apply-plan
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-apply-decisions
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-apply-audit
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-email-matches
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-unmatched-emails
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-no-change
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli show-apply-results
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-cards
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-stale-cards
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-drafts
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-review-queue
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-apply-plan
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-apply-decisions
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-apply-audit
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-email-matches
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-unmatched-emails
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-no-change
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli show-apply-results
 ```
 
 ### Review TUI / Interactive
 ```powershell
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli review-tui          # Rich TUI for review queue
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli review-draft <id>    # Full view of single draft
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli review-apply-tui     # Rich TUI for apply plan
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli review-apply-plan    # CLI interactive apply review
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli review-tui          # Rich TUI for review queue
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli review-draft <id>    # Full view of single draft
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli review-apply-tui     # Rich TUI for apply plan
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli review-apply-plan    # CLI interactive apply review
 ```
 
 ### Safe Write Commands (writes to review/apply files only — NOT Kanban)
 ```powershell
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli approve-draft <id>
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli skip-draft <id>
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli edit-draft <id>
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli build-apply-plan
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli export-apply-report
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli approve-draft <id>
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli skip-draft <id>
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli edit-draft <id>
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli build-apply-plan
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli export-apply-report
 ```
 
 ### Safe Pipeline Commands
 ```powershell
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli coach-chat --smoke-test   # Sandbox smoke test
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli coach-dry-run              # End-to-end dry-run
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli validate-phase4a           # Phase 4A checks
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli validate-phase4b           # Phase 4B checks
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli coach-chat --smoke-test   # Sandbox smoke test
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli coach-dry-run              # End-to-end dry-run
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli validate-phase4a           # Phase 4A checks
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli validate-phase4b           # Phase 4B checks
 ```
 
 ### Evidence Search (read-only mailbox search when enabled)
 ```powershell
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli evidence-search <card_id>
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli evidence-show-run <run_id>
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli evidence-regression-test
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli evidence-search <card_id>
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli evidence-show-run <run_id>
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli evidence-regression-test
 ```
 
 ### Conversational Coach (local sandbox only)
 ```powershell
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli coach-chat          # Interactive session
-.\venv\Scripts\python.exe -m sami_kanban_coach.cli coach-chat --smoke-test  # Automated smoke test
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli coach-chat          # Interactive session
+.\.venv\Scripts\python.exe -m sami_kanban_coach.cli coach-chat --smoke-test  # Automated smoke test
 ```
 Chat commands: `/status`, `/sources`, `/draft`, `/apply-local` (requires `APPLY LOCAL`), `/undo`, `/reset-local`, `/search`, `/card`, `/evidence`, `/help`, `/exit`
 
@@ -183,3 +183,92 @@ All existing workflow and layout is preserved — only visual styling changed.
 - Test `coach-dry-run` pipeline
 - Evaluate Qwen model response quality across multiple cards
 - Consider pushing to GitHub after Phase 6B handoff commit
+
+---
+
+## Phase 6C Addendum — sshawbadmin Dependency Verification
+
+Performed 2026-07-03 under `sshawbadmin` account (RDP session).
+
+### Account & Venv
+| Item | Value |
+|------|-------|
+| **Windows user** | `sshawbadmin` |
+| **Venv python** | `C:\Tools\SAMI Kanban Coach\.venv\Scripts\python.exe` |
+| **Python version** | 3.11.15 |
+| **Venv prefix** | `C:\Tools\SAMI Kanban Coach\.venv` |
+| **Base prefix** | `C:\Users\sshawbadmin\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none` |
+| **pip** | 24.0 (from Hermes venv site-packages) |
+
+**Note:** The `.venv/pyvenv.cfg` was repaired to point at the `sshawbadmin` uv python. This is local state — not tracked by Git, never committed.
+
+### Dependency Installation
+- **Source:** `pyproject.toml` (declared deps: pywin32, typer, rich, pydantic)
+- **Method:** `pip install -e .` (editable install from project root)
+- **Pre-existing:** All declared deps were already satisfied via the Hermes venv site-packages
+- **Purpose of `-e .`:** Ensures `sami_kanban_coach.*` modules are importable without `PYTHONPATH`
+
+### All Verified Dependencies
+
+| Category | Package | Status |
+|----------|---------|--------|
+| CLI | typer 0.26.8 | ✅ |
+| TUI | rich 14.3.3 | ✅ |
+| Config | pydantic 2.13.4 | ✅ |
+| HTTP | requests 2.33.0 | ✅ |
+| Excel | openpyxl 3.1.5 | ✅ |
+| Images | pillow 12.2.0 | ✅ |
+| Windows COM | pywin32 311 | ✅ |
+| COM support | pythoncom | ✅ |
+| Project modules | 6 modules | ✅ (review_tui, mailbox_search, coach_chat, cli, path_safety, evidence_pipeline) |
+
+### External Tools
+
+| Tool | Path | Version | Status |
+|------|------|---------|--------|
+| **Tesseract OCR** | `C:\Tools\Tesseract-OCR\tesseract.exe` | v5.4.0 | ✅ Installed (not on PATH) |
+| **Ollama** | localhost:11434 | 2 models | ✅ Reachable (qwen3:8b, llama3.2:3b) |
+| **Outlook COM** | pywin32 MAPI | Inbox (7435 items) | ✅ Connected & read-only |
+
+### CLI Verification Results
+
+| Command | Result |
+|---------|--------|
+| `compileall src/sami_kanban_coach -q` | ✅ PASS |
+| `cli --help` | ✅ PASS |
+| `coach-status` | ✅ PASS |
+| `review-tui --help` | ✅ PASS |
+| `review-apply-tui --help` | ✅ PASS |
+| `evidence-status` | ✅ PASS |
+| `local-ai-status` (16 checks) | ✅ **16/16 PASS** |
+
+### Safety Gates
+All 7 critical gates **disabled** — confirmed via `config/settings.json`:
+- `allow_kanban_apply=false`
+- `local_kanban_apply_enabled=false`
+- `team_kanban_apply_enabled=false`
+- `mailbox_search_enabled=false`
+- `mailbox_write_enabled=false`
+- `team_esmi_write_enabled=false`
+
+### Kanban Source Hash
+✅ `3e01e9af3d0daa87...` — **unchanged** from baseline.
+
+### Ad-hoc Verification
+Custom script `hermes-verify-deps-<random>.py` created under `%TEMP%`, run, and **deleted**.
+- **Result:** 18/18 PASS
+- **Script files confirmed cleaned up:** Yes
+
+### Git Hygiene
+- Only dirty tracked file: `IDEA.md` (untouched by this session) ✅
+- `.venv/pyvenv.cfg` not staged, not committed, not tracked ✅
+- No dependency install artifacts staged ✅
+- No source/config changes made ✅
+
+### Remaining Risks
+1. **Push to GitHub blocked** — No GitHub credentials configured under `sshawbadmin`. The 3 local commits (`ahead 3`) remain unpushed. Run `git push origin HEAD` from a Git-authenticated session.
+2. **Ollama slow response** — Qwen model may timeout on full smoke test (60s). Consider `llama3.2:3b` as faster alternative, or increase timeout.
+3. **Team ESMI offline** — Network path to `\\fusafmcf01\Medical Imaging\Team_ESMI\` unreachable (expected off VPN).
+4. **Tesseract not on PATH** — Must use absolute path `C:\Tools\Tesseract-OCR\tesseract.exe`; the `evidence-status` command finds it correctly.
+5. **Ollama not on PATH** — Available via HTTP at localhost:11434; `ollama.exe` not in any PATH.
+6. **Account switching** — If switching between `sshawb` and `sshawbadmin` profiles, `.venv/pyvenv.cfg` may need the `home` path updated again.
