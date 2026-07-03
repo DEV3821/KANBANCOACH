@@ -1,7 +1,8 @@
 """Mr Kanban local conversational coach harness.
 
-Phase 6A scope: local sandbox only, read-only context gathering, no Team ESMI
-or mailbox writes.
+Phase 6G scope: local sandbox only, deterministic routing, read-only context
+gathering, email only when explicitly requested, recommendation drafts only,
+no Team ESMI or mailbox writes.
 """
 
 from __future__ import annotations
@@ -63,6 +64,122 @@ def is_low_information_prompt(text: str) -> bool:
     if all(w in _LOW_INFO_PHRASES for w in words):
         return True
     return False
+
+
+@dataclass(frozen=True)
+class ChatRoute:
+    """Deterministic routing decision for a user prompt, computed before any retrieval.
+
+    This is model-agnostic Python logic — Qwen never decides routing.
+    """
+
+    intent: str = "unknown"
+    use_kanban: bool = False
+    use_email: bool = False
+    allow_recommendation: bool = False
+    allow_write: bool = False
+    reason: str = ""
+
+
+# Keywords that indicate the user explicitly wants email / mailbox / evidence search
+_EMAIL_KEYWORDS = frozenset({
+    "email", "mail", "mailbox", "outlook", "thread", "attachment",
+    "evidence", "inbox", "sent", "message", "conversation",
+})
+
+# Phrases that indicate the user wants a recommendation or suggested update
+_RECOMMEND_KEYWORDS = frozenset({
+    "recommend", "suggest", "draft", "prepare", "propose",
+    "what should",
+})
+
+
+def route_prompt(text: str) -> ChatRoute:
+    """Determine the chat route model-agnostically before any retrieval.
+
+    Returns a frozen ChatRoute that controls source selection and answer
+    generation downstream.
+    """
+    t = text.strip().lower()
+
+    # 1. Social / low-information — no retrieval at all
+    if is_low_information_prompt(t):
+        return ChatRoute(
+            intent="social",
+            use_kanban=False,
+            use_email=False,
+            allow_recommendation=False,
+            allow_write=False,
+            reason="Greeting or low-information prompt — no retrieval needed.",
+        )
+
+    # 2. Unsafe write request — detect explicit write/apply intent
+    # Use co-occurring keyword groups for robustness
+    write_intent = {"apply", "write", "commit", "push", "deploy", "save", "send", "update"}
+    board_target = {"kanban", "board", "team esmi", "mailbox"}
+    has_write_intent = bool(write_intent & {w for w in t.split()})
+    has_board_target = any(bt in t for bt in board_target)
+    has_write_phrase = any(phrase in t for phrase in [
+        "apply this", "apply to", "apply now",
+        "write to", "write this",
+        "commit change", "make it live",
+        "update kanban", "update the board", "update board",
+        "send email", "send this",
+        "save card", "save to",
+    ])
+    if has_write_phrase or (has_write_intent and has_board_target):
+        return ChatRoute(
+            intent="unsafe_write_request",
+            use_kanban=True,
+            use_email=False,
+            allow_recommendation=False,
+            allow_write=False,
+            reason="Explicit write or update request detected — safety gates disable all writes.",
+        )
+
+    # 3. Email evidence lookup — only when explicitly requested
+    wants_email = any(kw in t for kw in _EMAIL_KEYWORDS)
+
+    # 4. Recommendation draft
+    wants_recommend = any(kw in t for kw in _RECOMMEND_KEYWORDS)
+
+    if wants_email and wants_recommend:
+        return ChatRoute(
+            intent="email_evidence_lookup",
+            use_kanban=True,
+            use_email=True,
+            allow_recommendation=True,
+            allow_write=False,
+            reason="Mixed email evidence and recommendation request.",
+        )
+    if wants_email:
+        return ChatRoute(
+            intent="email_evidence_lookup",
+            use_kanban=True,
+            use_email=True,
+            allow_recommendation=False,
+            allow_write=False,
+            reason="Explicit email/mailbox/evidence request — read-only email enabled.",
+        )
+    if wants_recommend:
+        return ChatRoute(
+            intent="recommendation_draft",
+            use_kanban=True,
+            use_email=False,
+            allow_recommendation=True,
+            allow_write=False,
+            reason="Recommendation or draft request — Kanban context only, no writes.",
+        )
+
+    # 5. Default: Kanban lookup
+    return ChatRoute(
+        intent="kanban_lookup",
+        use_kanban=True,
+        use_email=False,
+        allow_recommendation=False,
+        allow_write=False,
+        reason="Default Kanban context lookup.",
+    )
 
 
 @dataclass
@@ -339,6 +456,25 @@ def search_prior_evidence(query: str, limit: int = 5) -> list[ChatSource]:
     return sources
 
 
+def format_safe_email_evidence(items: list[Any], *, max_items: int = 3) -> list[str]:
+    """Format email evidence items with a safety cap and no raw body dumps.
+
+    Returns a concise metadata-only summary suitable for chat display.
+    """
+    out: list[str] = []
+    for i, item in enumerate(items[:max_items]):
+        if isinstance(item, dict):
+            subject = str(item.get("subject") or item.get("email_subject") or "(no subject)")
+            sender = str(item.get("sender") or "(unknown sender)")
+            date = str(item.get("date") or item.get("received_date") or "")[:16]
+            ref = str(item.get("email_key") or item.get("conversation_id") or f"email-{i}")
+            line = f"{ref}: {subject} | {sender} | {date}"
+            out.append(line)
+        else:
+            out.append(str(item)[:200])
+    return out
+
+
 def search_mailbox_context(settings: Any, card: dict[str, Any] | None, query: str) -> tuple[list[ChatSource], dict[str, Any]]:
     profile = chat_profile_settings(settings)
     if not card:
@@ -377,25 +513,38 @@ def search_mailbox_context(settings: Any, card: dict[str, Any] | None, query: st
     return sources, data
 
 
-def build_context(settings: Any, query: str) -> ChatState:
+def build_context(settings: Any, query: str, route: ChatRoute | None = None) -> ChatState:
+    """Build chat context by retrieving from allowed sources based on the route.
+
+    If no route provided, defaults to kanban_lookup (Kanban only, no email).
+    Email context is ONLY retrieved when route.use_email is True.
+    """
+    if route is None:
+        route = ChatRoute(intent="kanban_lookup", use_kanban=True, reason="No route provided, defaulting to Kanban lookup.")
     state = ChatState(last_query=query)
-    card = find_card(settings, query)
-    state.selected_card = card
-    if card:
-        state.sources.append(ChatSource(
-            "local_kanban_sandbox",
-            _card_ref(card),
-            f"{card.get('title','')} | status={card.get('status','')} risk={card.get('riskColour') or card.get('risk','')} | next={(card.get('nextAction') or card.get('next') or '')[:220]}",
-            card,
-        ))
-    prior_query = query
-    if card:
-        prior_query = " ".join(str(card.get(k, "")) for k in ("id", "title")) + " " + query
-    prior = search_prior_evidence(prior_query)
-    state.sources.extend(prior)
-    mailbox_sources, mailbox_data = search_mailbox_context(settings, card, query)
-    state.sources.extend(mailbox_sources)
-    state.mailbox_result = mailbox_data
+    # Only search Kanban if the route allows it
+    if route.use_kanban:
+        card = find_card(settings, query)
+        state.selected_card = card
+        if card:
+            state.sources.append(ChatSource(
+                "local_kanban_sandbox",
+                _card_ref(card),
+                f"{card.get('title','')} | status={card.get('status','')} risk={card.get('riskColour') or card.get('risk','')} | next={(card.get('nextAction') or card.get('next') or '')[:220]}",
+                card,
+            ))
+    # Search prior evidence only if using Kanban context
+    if route.use_kanban:
+        prior_query = query
+        if state.selected_card:
+            prior_query = " ".join(str(state.selected_card.get(k, "")) for k in ("id", "title")) + " " + query
+        prior = search_prior_evidence(prior_query)
+        state.sources.extend(prior)
+    # Email context — ONLY when explicitly requested in the route
+    if route.use_email:
+        mailbox_sources, mailbox_data = search_mailbox_context(settings, state.selected_card, query)
+        state.sources.extend(mailbox_sources)
+        state.mailbox_result = mailbox_data
     ok, msg, _models = check_ollama(settings.ollama_base_url, timeout=5)
     if ok:
         model_ok, model_msg = check_model_available(settings.ollama_base_url, settings.ollama_model, timeout=5)
@@ -832,6 +981,31 @@ def render_greeting(console: Console) -> None:
     console.print("[dim]Type /help for commands.[/dim]", style="bold")
 
 
+def render_unsafe_write_response(console: Console) -> None:
+    """Print a clear refusal with explanation of write gates.
+
+    Triggered when the user explicitly asks to write/apply to a live
+    Kanban board, Team ESMI, or mailbox.
+    """
+    console.print(Rule("Mr Kanban — Write request refused", style="red"))
+    console.print(
+        "I cannot perform that write operation.\n\n"
+        "All write gates are disabled for safety:\n"
+        "- `allow_kanban_apply`: disabled\n"
+        "- `local_kanban_apply_enabled`: disabled\n"
+        "- `team_kanban_apply_enabled`: disabled\n"
+        "- `mailbox_write_enabled`: disabled\n"
+        "- `team_esmi_write_enabled`: disabled\n\n"
+        "If you need a controlled update, you can:\n"
+        "1. Ask me to draft a recommendation (Mr Kanban will suggest safe local sandbox changes)\n"
+        "2. Use `/apply-local` from within the interactive session (requires explicit 'APPLY LOCAL' confirmation)\n"
+        "3. Use the pipeline review/apply workflow (`review-tui`, `build-apply-plan`, etc.)\n\n"
+        "No Team ESMI write has been made. No mailbox write has been made.",
+        style="yellow",
+    )
+    console.print()
+
+
 def render_sources(console: Console, state: ChatState) -> None:
     if not state.sources:
         console.print("[yellow]No sources yet. Ask a question first.[/yellow]")
@@ -861,8 +1035,21 @@ def render_draft(console: Console, draft: dict[str, Any] | None) -> None:
 
 
 def render_answer(console: Console, state: ChatState, response: dict[str, Any]) -> None:
+    card = state.selected_card or {}
     console.print(Rule("Mr Kanban answer", style=SAMI_TEAL))
     console.print(str(response.get("answer", "")))
+    # Show grounded card metadata when we have a selected card
+    if card:
+        title = str(card.get("title") or "not recorded")
+        status = str(card.get("status") or "not recorded")
+        risk = str(card.get("riskColour") or card.get("risk") or "not recorded")
+        lead = str(card.get("projectLead") or "not recorded")
+        context = str(card.get("context") or "not recorded")
+        next_action = str(card.get("nextAction") or card.get("next") or "not recorded")
+        console.print("\n[bold]Based on:[/bold]")
+        console.print(f"- Card: {title} | status={status} | risk={risk} | lead={lead}")
+        console.print(f"- Current state: {context[:300]}")
+        console.print(f"- Next action: {next_action[:300]}")
     console.print("\n[bold]Evidence:[/bold]")
     ev = response.get("evidence", []) or []
     if ev:
@@ -877,8 +1064,6 @@ def render_answer(console: Console, state: ChatState, response: dict[str, Any]) 
     console.print(str(response.get("recommendation", "Review evidence before local sandbox update.")))
     console.print("\n[bold]Confidence:[/bold]")
     console.print(str(response.get("confidence", 0.0)))
-    console.print("\n[bold]Next action:[/bold]")
-    console.print(str(response.get("next_action", "Review evidence.")))
     console.print("\n[bold]Safety:[/bold]")
     for line in _context_usage_lines(state):
         console.print(line)
@@ -906,7 +1091,8 @@ def run_smoke_test(settings: Any, console: Console | None = None) -> dict[str, A
     settings = chat_profile_settings(settings)
     render_banner(console, settings)
     sandbox_info = ensure_sandbox(settings, refresh=True)
-    state = build_context(settings, "What is the latest on NT UltraRad VPN/firewall?")
+    smoke_route = ChatRoute(intent="kanban_lookup", use_kanban=True, reason="Smoke test Kanban lookup.")
+    state = build_context(settings, "What is the latest on NT UltraRad VPN/firewall?", smoke_route)
     response = build_draft(settings, state)
     if state.draft and state.selected_card:
         current_next = str(state.selected_card.get("nextAction") or state.selected_card.get("next") or "")
@@ -960,7 +1146,7 @@ def interactive_loop(settings: Any, console: Console | None = None) -> None:
     render_banner(console, settings)
     ensure_sandbox(settings, refresh=False)
     state = ChatState()
-    console.print("[dim]Type /help for commands. Normal questions search Kanban, email context, attachments, and prior evidence.[/dim]")
+    console.print("[dim]Type /help for commands. Normal questions search Kanban context only. Email evidence is only used when you explicitly ask (e.g. 'find email context for ...').[/dim]")
     while True:
         raw = Prompt.ask("Mr Kanban").strip()
         if not raw:
@@ -1046,10 +1232,42 @@ def interactive_loop(settings: Any, console: Console | None = None) -> None:
             continue
         if raw.startswith("/search "):
             raw = raw[len("/search "):].strip()
-        # Greeting/low-info guard — bypass retrieval entirely
-        if is_low_information_prompt(raw):
+
+        # Route prompt model-agnostically before any retrieval
+        route = route_prompt(raw)
+
+        # Social / low-information — no retrieval at all
+        if route.intent == "social":
             render_greeting(console)
             continue
-        state = build_context(settings, raw)
+
+        # Unsafe write request — refuse with gate explanation
+        if route.intent == "unsafe_write_request":
+            render_unsafe_write_response(console)
+            # Also show what card we'd be talking about if Kanban is relevant
+            route_for_explain = ChatRoute(intent="kanban_lookup", use_kanban=True, reason="Showing card context for write refusal.")
+            explain_state = build_context(settings, raw, route_for_explain)
+            if explain_state.selected_card:
+                console.print(f"[dim]Card mentioned: {_card_title(explain_state.selected_card)}[/dim]")
+            continue
+
+        # Normal routed query — build context respecting the route's source selection
+        state = build_context(settings, raw, route)
+
+        # For recommendation drafts, add system note about draft-only mode
         response = build_draft(settings, state)
+        if route.intent == "recommendation_draft":
+            response["answer"] = (
+                str(response.get("answer", ""))
+                + "\n\n[Note: This is a draft recommendation only. No Kanban board has been updated. "
+                "No Team ESMI write has been made. No mailbox write has been made. "
+                "Use /apply-local or the pipeline review workflow to apply changes.]"
+            )
+
         render_answer(console, state, response)
+
+        # If email was used, log the cap info
+        if route.use_email and state.sources:
+            email_count = sum(1 for s in state.sources if s.kind == "email")
+            if email_count > 3:
+                console.print(f"[dim]Email evidence capped at 3 of {email_count} items found.[/dim]")

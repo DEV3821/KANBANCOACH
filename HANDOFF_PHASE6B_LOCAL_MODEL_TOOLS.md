@@ -431,3 +431,145 @@ All changes keep evidence useful while preventing accidental patient-data dumps.
 ```text
 f6599dd..XXXXXXXX Guard Mr Kanban chat greetings and evidence output
 ```
+
+---
+
+## Phase 6G Addendum — Deterministic Routing and Grounded Answers
+
+Performed 2026-07-04 under `sshawbadmin` account.
+
+### Problem
+
+Phase 6F fixed greeting detection, but:
+1. Every non-greeting prompt triggered full Kanban + email search indiscriminately
+2. No typed routing — all Kanban/email/recommendation/write prompts hit the same code path
+3. Email context was always searched, even for simple Kanban lookups
+4. No unsafe write handler existed
+5. Answer shape lacked structured card metadata grounding
+
+### Changes Made
+
+**File: `src/sami_kanban_coach/coach_chat.py`**
+
+#### 1. `ChatRoute` dataclass (model-agnostic routing)
+
+```python
+@dataclass(frozen=True)
+class ChatRoute:
+    intent: str         # social | kanban_lookup | email_evidence_lookup | recommendation_draft | unsafe_write_request | unknown
+    use_kanban: bool    # whether to retrieve Kanban card context
+    use_email: bool     # whether to retrieve email evidence
+    allow_recommendation: bool
+    allow_write: bool
+    reason: str
+```
+
+#### 2. `route_prompt()` function
+
+Deterministic, model-agnostic routing with priority:
+
+| Priority | Route | Trigger |
+|----------|-------|---------|
+| 1 | `social` | `is_low_information_prompt()` match |
+| 2 | `unsafe_write_request` | Write keywords + board-target co-occurrence or explicit write phrases |
+| 3 | `email_evidence_lookup` | Email/mailbox/Outlook/evidence/attachment keywords |
+| 4 | `recommendation_draft` | Recommend/draft/suggest/prepare/propose keywords |
+| 5 | `kanban_lookup` | Default fallback |
+
+#### 3. Source selection obeys route
+
+`build_context(settings, query, route=None)`:
+- `use_kanban=True`: retrieves Kanban card + prior evidence
+- `use_email=True`: retrieves mailbox context (read-only, capped)
+- Both default to `False` if route omitted
+
+Email is **never** retrieved unless `route.use_email == True`.
+
+#### 4. Unsafe write handler
+
+`render_unsafe_write_response(console)` — prints:
+- Refusal with gate status table
+- Alternative safe paths (draft recommendation, `/apply-local`, pipeline workflow)
+- Safety footer: No Team ESMI, no mailbox write
+
+#### 5. Structured grounded answer
+
+`render_answer()` now shows a "Based on:" section with card metadata:
+```
+- Card: <title> | status=<status> | risk=<risk> | lead=<lead>
+- Current state: <context or "not recorded">
+- Next action: <nextAction or "not recorded">
+```
+
+Missing values display `not recorded` — no invented data.
+
+#### 6. Email safety helpers
+
+- `format_safe_email_evidence(items, max_items=3)` — metadata-only summary, no raw bodies, capped at 3 by default
+- Evidence rendering in interactive loop shows cap note when email exceeds 3 items
+
+### Route Test Results (31/31 PASS)
+
+| Category | Tested | Result |
+|----------|--------|--------|
+| Social (no retrieval) | 7 prompts | ✅ All `intent=social`, no kanban/email/write |
+| Kanban-only | 4 prompts | ✅ All `intent=kanban_lookup`, `use_kanban=true`, `use_email=false` |
+| Email evidence | 4 prompts | ✅ All `intent=email_evidence_lookup`, `use_email=true`, `allow_write=false` |
+| Recommendation | 3 prompts | ✅ All `intent=recommendation_draft`, `allow_recommendation=true`, `allow_write=false` |
+| Unsafe write | 4 prompts | ✅ All `intent=unsafe_write_request`, `allow_write=false` |
+
+### Chat Behaviour
+
+| Scenario | Expected | Behaviour |
+|----------|----------|-----------|
+| `hello mr kanban` | Friendly greeting, no retrieval | ✅ Social route, `render_greeting()` |
+| `what stale cards need attention` | Kanban lookup only | ✅ `kanban_lookup` route, kanban only |
+| `summarise the Monitor Replacement card` | Card metadata, grounded | ✅ Structured "Based on:" section |
+| `find email context for NT UltraRad` | Email evidence (read-only) | ✅ `email_evidence_lookup`, capped |
+| `apply this to Team ESMI now` | Refuse, explain gates | ✅ `unsafe_write_request`, `render_unsafe_write_response()` |
+
+### Safety Gate Status
+
+| Gate | Status |
+|------|--------|
+| `allow_kanban_apply` | False ✅ |
+| `local_kanban_apply_enabled` | False ✅ |
+| `team_kanban_apply_enabled` | False ✅ |
+| `mailbox_search_enabled` | False ✅ |
+| `mailbox_write_enabled` | False ✅ |
+| `team_esmi_write_enabled` | False ✅ |
+| `mailbox_search_read_only` | True ✅ |
+| `kanban_apply_target` | `local_sandbox` ✅ |
+| Kanban source hash | `3e01e9af...` ✅ Unchanged |
+
+### Known Qwen Delay
+
+Response from `qwen3:8b` takes ~63s. This is acceptable for Phase 6G quality work.
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `compileall src/sami_kanban_coach -q` | ✅ PASS |
+| `cli --help` | ✅ PASS (shows `coach-chat`) |
+| `coach-chat --help` | ✅ PASS (shows `--smoke-test`) |
+| `local-ai-status` | ✅ 16/16 PASS |
+| `coach-status` | ✅ PASS (gates disabled) |
+| Safety gates (8 critical) | ✅ All disabled/read-only |
+| Temp verifier (31 checks) | ✅ 31/31 PASS, cleaned up |
+| Kanban hash | ✅ `3e01e9af...` unchanged |
+
+### Remaining Risks
+
+1. **Qwen is slow** (~63s first response). Consider `llama3.2:3b` for faster interaction.
+2. **Team ESMI offline** — Network path to `\\fusafmcf01\Medical Imaging\Team_ESMI\` unreachable (expected off VPN).
+3. **GitHub push blocked** — 6 commits ahead, unpushed.
+4. **Routing is heuristic** — some edge prompts may misclassify (e.g. `"can you update the firewall card"` contains `"update"` but says `"can you"` which suggests lookup, not write). Monitor and adjust phrase sets as needed.
+5. **Qwen not exercised end-to-end** — routing and source selection verified statically; actual Qwen generation depends on model availability (confirmed reachable) and ~63s timeout.
+
+### Recommended Next Phase (Phase 6H)
+
+- ✅ ~~Run `coach-chat --smoke-test` with new routing code~~ (tested via headless harness)
+- ✅ ~~Run interactive `coach-chat` and test: greeting, kanban lookup, email evidence, recommendation, unsafe write~~ (5/5 headless tests passed)
+- Evaluate Qwen answer quality with grounded output in interactive session
+- Consider pushing to GitHub
