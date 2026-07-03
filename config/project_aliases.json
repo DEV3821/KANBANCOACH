@@ -1,0 +1,61 @@
+{
+    "card-001-nt-ultrarad-stroke-vpn-firewall-rules": [
+        "ultrarad",
+        "stroke vpn",
+        "REQ2026637"
+    ],
+    "card-008-tas-dicom-transfer-vpn-tunnel-sia": [
+        "tas dicom",
+        "dicom transfer",
+        "vpn tunnel dicom",
+        "sia connectivity"
+    ],
+    "card-022-windows-11-desktop-migration": [
+        "win11",
+        "windows 11"
+    ],
+    "card-016-medicare-compliance-phase-2": [
+        "medicare phase 2",
+        "medicare compliance"
+    ],
+    "card-013-axon-mitis-secure-remote-gateway": [
+        "mitis",
+        "axon mitis",
+        "secure remote",
+        "TDRC"
+    ],
+    "card-019-mitis-health-pilot-pocus-solution": [
+        "pocus",
+        "mitis health",
+        "mitis pilot"
+    ],
+    "card-007-pacs-scan-enterprise-document-distribution": [
+        "pacs scan",
+        "enterprise document",
+        "document distribution"
+    ],
+    "card-014-pacs-hardware-refresh-upgrade-3-stage-program": [
+        "pacs hardware",
+        "pacs refresh",
+        "hardware refresh",
+        "dc1",
+        "dc2"
+    ],
+    "card-009-syngo-via-siemens-avw-eol": [
+        "syngo",
+        "avw",
+        "siemens eol",
+        "avw eol"
+    ],
+    "card-010-philips-ai-manager": [
+        "philips ai"
+    ],
+    "card-012-vue-motion-dc-relocation": [
+        "vue motion",
+        "dc relocation"
+    ],
+    "card-023-esmi-strategic-roadmap": [
+        "esmi roadmap",
+        "strategic roadmap"
+    ]
+}
