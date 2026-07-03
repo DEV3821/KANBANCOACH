@@ -463,17 +463,12 @@ def _search_outlook_com(
                                 "filename": att["name"],
                                 "size": att["size"],
                             })
-                # Also capture non-matching thread items for count
-                try:
-                    subj = str(item.Subject) if item.Subject else ""
-                except Exception:
-                    subj = ""
-                if "UltraRad" in subj or "RAH" in subj or "NT Health Stroke" in subj:
-                    target_thread_count += 1
+                # Also capture total items found by targeted search
+                target_thread_count += 1
             targeted_found = count > 0
             inbox_info["targeted_subject_found"] = targeted_found
             inbox_info["targeted_subject_searched_value"] = targeted_subject
-            inbox_info["target_thread_message_count"] = target_thread_count
+            inbox_info["targeted_total_found"] = target_thread_count
             search_strategy = "targeted_dasl"
         except Exception as e:
             inbox_info["targeted_subject_found"] = False
@@ -516,11 +511,9 @@ def _search_outlook_com(
             except Exception:
                 pass
 
-    # Count thread messages
-    thread_count = sum(1 for e in all_matched_emails
-                       if "UltraRad" in e.get("subject", "") or "RAH" in e.get("subject", "")
-                       or "NT Health Stroke" in e.get("subject", ""))
-    inbox_info["target_thread_message_count"] = thread_count
+    # Count total thread messages found (generic, not tied to specific topic)
+    thread_count = len(all_matched_emails)
+    inbox_info["total_thread_messages_found"] = thread_count
     inbox_info["conv_ids_found"] = len(conv_ids_found)
 
     # =====================================================================

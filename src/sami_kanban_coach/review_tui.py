@@ -65,6 +65,9 @@ DECISION_COLORS: dict[str, str] = {
     "pending": "white",
 }
 
+# SAMI brand colour
+SAMI_TEAL = "#008C95"
+
 HASH_LABELS: dict[str, tuple[str, str]] = {
     "match": ("[bold green]match[/bold green]", "green"),
     "conflict": ("[bold red]CONFLICT[/bold red]", "red"),
@@ -310,7 +313,7 @@ def _show_filtered_only_screen(
             f"[{color}]{dec_label}[/{color}]",
         )
 
-    console.print(Panel(ftable, border_style="blue", padding=(1, 2)))
+    console.print(Panel(ftable, border_style=SAMI_TEAL, padding=(1, 2)))
     console.print()
 
     # Interactive loop for filtered items
@@ -367,7 +370,7 @@ def _show_filtered_only_screen(
                 Prompt.ask("Press Enter to continue", default="")
         elif cmd in ("v", "view", "view-full"):
             console.clear()
-            console.print(f"[bold cyan]Full View (Filtered): {item.get('title', '')}[/bold cyan]")
+            console.print(f"[bold {SAMI_TEAL}]Full View (Filtered): {item.get('title', '')}[/bold {SAMI_TEAL}]")
             console.print()
             console.print("[bold]Card Details:[/bold]")
             console.print(f"  Apply ID:      {aid}")
@@ -401,7 +404,7 @@ def _show_filtered_only_screen(
             Prompt.ask("Press Enter to return", default="")
         elif cmd in ("x", "export"):
             console.clear()
-            console.print("[bold cyan]Export Filtered Diagnostic Report[/bold cyan]")
+            console.print(f"[bold {SAMI_TEAL}]Export Filtered Diagnostic Report[/bold {SAMI_TEAL}]")
             console.print()
             default_name = f"filtered_diagnostic_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
             default_path = apply_root / "data" / default_name
@@ -530,7 +533,7 @@ def _build_comparison_table(
     table = Table(
         box=box.SIMPLE,
         show_header=True,
-        header_style="bold cyan",
+        header_style=f"bold {SAMI_TEAL}",
         border_style="dim",
         title="Before / After Comparison",
         title_style="bold",
@@ -616,13 +619,13 @@ def _build_header_panel(
     )
 
     title_text = (
-        "[bold cyan]SAMI Kanban Coach[/bold cyan]\n"
+        f"[bold {SAMI_TEAL}]SAMI Kanban Coach[/bold {SAMI_TEAL}]\n"
         "[bold]Apply Review Console[/bold]\n"
         f"{status_line}\n"
         "[dim]Read-only review: decisions are recorded, Kanban is not updated.[/dim]"
     )
 
-    return Panel(title_text, border_style="cyan", padding=(1, 2))
+    return Panel(title_text, border_style=SAMI_TEAL, padding=(1, 2))
 
 
 def _build_item_detail_panel(
@@ -687,10 +690,10 @@ def _build_item_detail_panel(
 
     # Combine in a vertical layout
     layout = Table.grid(padding=(0, 1))
-    layout.add_row(Panel(card_table, border_style="blue", padding=(1, 2), title="[bold]Card Details[/bold]"))
-    layout.add_row(Panel(comp_table, border_style="blue", padding=(1, 2)))
+    layout.add_row(Panel(card_table, border_style=SAMI_TEAL, padding=(1, 2), title="[bold]Card Details[/bold]"))
+    layout.add_row(Panel(comp_table, border_style=SAMI_TEAL, padding=(1, 2)))
 
-    return Panel(layout, border_style="bright_blue", padding=(0, 1))
+    return Panel(layout, border_style=SAMI_TEAL, padding=(0, 1))
 
 
 def _build_footer_panel() -> Panel:
@@ -744,7 +747,7 @@ def _build_summary(items: list[dict[str, Any]], decisions: dict[str, dict[str, A
         if not has_changes:
             noop += 1
 
-    summary = Table(title="Apply Review Summary", box=box.ROUNDED, title_style="bold cyan")
+    summary = Table(title="Apply Review Summary", box=box.ROUNDED, title_style=f"bold {SAMI_TEAL}")
     summary.add_column("Metric", style="bold", width=22)
     summary.add_column("Count", style="bold", width=8)
     summary.add_column("Details", width=44)
@@ -979,7 +982,7 @@ def _render_recommendation_queue(
     table = Table(
         box=box.SIMPLE,
         show_header=True,
-        header_style="bold cyan",
+        header_style=f"bold {SAMI_TEAL}",
         expand=True,
     )
     table.add_column("#", width=4, no_wrap=True)
@@ -1023,7 +1026,7 @@ def _render_recommendation_queue(
             conf_display,
         )
 
-    return Panel(table, border_style="blue", padding=(1, 2), title="[bold]Recommendation Queue[/bold]")
+    return Panel(table, border_style=SAMI_TEAL, padding=(1, 2), title="[bold]Recommendation Queue[/bold]")
 
 
 # ---------------------------------------------------------------------------
@@ -1229,7 +1232,7 @@ def run_apply_review_tui(settings: Any, show_filtered: bool = False) -> None:
             mode_str += " (--show-filtered)"
 
         header_panel = Panel(
-            f"[bold cyan]SAMI Kanban Coach[/bold cyan]  |  [bold]{mode_str}[/bold]\n"
+            f"[bold {SAMI_TEAL}]SAMI Kanban Coach[/bold {SAMI_TEAL}]  |  [bold]{mode_str}[/bold]\n"
             f"Recommendations: {real_total} real  |  "
             f"[bold green]{changed_count}[/bold green] update  |  "
             f"[dim]{unchanged_count}[/dim] unchanged  |  "
@@ -1237,7 +1240,7 @@ def run_apply_review_tui(settings: Any, show_filtered: bool = False) -> None:
             f"[yellow]{skipped_count}[/yellow] skipped"
             + (f"  |  [yellow]{len(smoke_items)} filtered (diagnostic)[/yellow]" if show_filtered and smoke_items else "")
             + "\n[dim]No Kanban writes performed from this screen.[/dim]",
-            border_style="cyan", padding=(1, 2),
+            border_style=SAMI_TEAL, padding=(1, 2),
         )
         console.print(header_panel)
         console.print()
@@ -1349,7 +1352,7 @@ def run_apply_review_tui(settings: Any, show_filtered: bool = False) -> None:
 
         elif cmd in ("v", "view", "view-full"):
             console.clear()
-            console.print(f"[bold cyan]Full View: {item.get('title', '')}[/bold cyan]")
+            console.print(f"[bold {SAMI_TEAL}]Full View: {item.get('title', '')}[/bold {SAMI_TEAL}]")
             console.print()
             console.print("[bold]Card Details:[/bold]")
             console.print(f"  Apply ID:      {apply_id}")
@@ -1407,7 +1410,7 @@ def run_apply_review_tui(settings: Any, show_filtered: bool = False) -> None:
 
         elif cmd in ("x", "export"):
             console.clear()
-            console.print("[bold cyan]Export Review Report[/bold cyan]")
+            console.print(f"[bold {SAMI_TEAL}]Export Review Report[/bold {SAMI_TEAL}]")
             console.print()
             default_name = f"apply_review_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
             default_path = apply_root / "data" / default_name
@@ -1586,7 +1589,7 @@ def run_apply_review_tui(settings: Any, show_filtered: bool = False) -> None:
             elif advice_cmd == "e":
                 # Edit flow — show prompts prefilled with suggestions
                 console.clear()
-                console.print(f"[bold cyan]Edit Card with Qwen Suggestions — {item.get('title', '')}[/bold cyan]")
+                console.print(f"[bold {SAMI_TEAL}]Edit Card with Qwen Suggestions — {item.get('title', '')}[/bold {SAMI_TEAL}]")
                 console.print()
                 cs = Prompt.ask("Current State", default=advice.get("suggested_current_state", "") or item.get("approvedCurrentState", "") or current_card.get("context", "") if current_card else "")
                 na = Prompt.ask("Next Action", default=advice.get("suggested_next_action", "") or item.get("approvedNextAction", "") or current_card.get("nextAction", "") if current_card else "")
@@ -1681,7 +1684,7 @@ def run_apply_review_tui(settings: Any, show_filtered: bool = False) -> None:
 
     # Final summary on exit
     console.clear()
-    console.print("[bold cyan]Review session complete.[/bold cyan]")
+    console.print(f"[bold {SAMI_TEAL}]Review session complete.[/bold {SAMI_TEAL}]")
     _build_summary(sorted_items, load_apply_decisions(apply_root))
 
 
