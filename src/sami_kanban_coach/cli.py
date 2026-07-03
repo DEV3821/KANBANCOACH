@@ -2843,18 +2843,16 @@ def evidence_status():
     _r("Python version", sys.version_info >= (3, 11), py_ver)
 
     # 2. Imports
-    for mod_name, label in [
-        ("win32com.client", "pywin32"),
-        ("openpyxl", "openpyxl"),
-        ("pytesseract", "pytesseract"),
-        ("PIL", "Pillow"),
-        ("docx", "python-docx"),
-    ]:
-        try:
-            __import__(mod_name)
-            _r(label, True, f"{mod_name} imported OK")
-        except ImportError:
-            _r(label, False, f"{mod_name} not available")
+    try: import win32com.client; _r("pywin32", True, "import OK")
+    except Exception as e: _r("pywin32", False, str(e)[:60])
+    try: import openpyxl; _r("openpyxl", True, "import OK")
+    except Exception as e: _r("openpyxl", False, str(e)[:60])
+    try: import pytesseract; _r("pytesseract", True, "import OK")
+    except Exception as e: _r("pytesseract", False, str(e)[:60])
+    try: from PIL import Image; _r("Pillow", True, "import OK")
+    except Exception as e: _r("Pillow", False, str(e)[:60])
+    try: import docx; _r("python-docx", True, "import OK")
+    except Exception as e: _r("python-docx", False, str(e)[:60])
 
     # 3. PDF parser
     for mod_name in ["PyPDF2", "pdfminer", "fitz"]:
@@ -2934,7 +2932,7 @@ def evidence_status():
         try:
             ok, msg, parsed = generate(
                 base_url=settings.ollama_base_url, model=settings.ollama_model,
-                system_prompt="Return JSON.", user_prompt='{"t":1}', timeout=10,
+                system_prompt="Return JSON.", user_prompt='{"t":1}', timeout=30,
             )
             _r("JSON mode test", ok, "structured output works" if ok else msg[:80])
         except Exception as e:
@@ -3160,6 +3158,38 @@ def evidence_show_run(
         console.print(f"\n  SITREP: {sitrep_path}")
 
     console.print(f"\n  [dim]Run path: {run_path}[/dim]")
+
+
+@app.command(name="evidence-regression-test")
+def evidence_regression_test():
+    """Run deterministic NT UltraRad regression test against preserved evidence.
+
+    Uses v10/v11/v12 evidence artifacts only. No Outlook/Kanban access.
+    """
+    from .evidence_regression_test import run_regression
+
+    console.print("[bold cyan]Running NT UltraRad regression test...[/bold cyan]")
+    console.print("  No Outlook access. No Kanban writes. Read-only evidence check.")
+    console.print()
+
+    result = run_regression()
+
+    passed = result.get("passed", 0)
+    failed = result.get("failed", 0)
+    total = result.get("total", 0)
+
+    for res in result.get("results", []):
+        sym = "[green]✓[/green]" if res["status"] == "PASS" else "[red]✗[/red]" if res["status"] == "FAIL" else "[yellow]—[/yellow]"
+        console.print(f"  {sym} {res['check']}")
+        if res.get("detail"):
+            console.print(f"      {res['detail']}")
+
+    console.print()
+    if failed == 0:
+        console.print(f"[green]Regression test: {passed}/{total} passed, 0 failed — ALL PASSED[/green]")
+    else:
+        console.print(f"[red]Regression test: {passed}/{total} passed, {failed} failed[/red]")
+        raise typer.Exit(1)
 
 
 @app.command(name="evidence-reset-workspace")
