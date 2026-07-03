@@ -2803,6 +2803,402 @@ def local_ai_status():
 
 
 @app.command(name="export-pilot-report")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 5: Evidence pipeline CLI
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@app.command(name="evidence-status")
+def evidence_status():
+    """Check evidence pipeline dependencies and tool availability."""
+    from rich.table import Table
+
+    table = Table(title="Evidence Pipeline — Status Check", show_header=True)
+    table.add_column("Check", style="cyan", no_wrap=True)
+    table.add_column("Result", style="bold")
+    table.add_column("Detail")
+
+    passed = 0
+    failed = 0
+    warnings = 0
+
+    def _r(check, ok, detail=""):
+        nonlocal passed, failed
+        if ok:
+            passed += 1
+            table.add_row(check, "[green]PASS[/green]", detail)
+        else:
+            failed += 1
+            table.add_row(check, "[red]FAIL[/red]", detail)
+
+    def _w(check, detail):
+        nonlocal warnings
+        warnings += 1
+        table.add_row(check, "[yellow]WARN[/yellow]", detail)
+
+    # 1. Python / venv
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    _r("Python version", sys.version_info >= (3, 11), py_ver)
+
+    # 2. Imports
+    for mod_name, label in [
+        ("win32com.client", "pywin32"),
+        ("openpyxl", "openpyxl"),
+        ("pytesseract", "pytesseract"),
+        ("PIL", "Pillow"),
+        ("docx", "python-docx"),
+    ]:
+        try:
+            __import__(mod_name)
+            _r(label, True, f"{mod_name} imported OK")
+        except ImportError:
+            _r(label, False, f"{mod_name} not available")
+
+    # 3. PDF parser
+    for mod_name in ["PyPDF2", "pdfminer", "fitz"]:
+        try:
+            __import__(mod_name)
+            _r(f"PDF parser ({mod_name})", True, f"{mod_name} available")
+            break
+        except ImportError:
+            continue
+    else:
+        _w("PDF parser", "No PDF parser found — PDF attachments will be skipped")
+
+    # 4. compileall evidence modules
+    import py_compile
+    for fname in ["evidence_pipeline.py", "local_ai_adviser.py"]:
+        fp = _REPO_ROOT / "src" / "sami_kanban_coach" / fname
+        try:
+            py_compile.compile(fp, doraise=True)
+            _r(f"compile {fname}", True, "OK")
+        except py_compile.PyCompileError as e:
+            _r(f"compile {fname}", False, str(e)[:80])
+
+    # 5. Outlook COM
+    try:
+        import win32com.client
+        app = win32com.client.Dispatch("Outlook.Application")
+        ns = app.GetNamespace("MAPI")
+        inbox = ns.GetDefaultFolder(6)
+        _r("Outlook Inbox", True, f"{getattr(inbox,'FolderPath','?')} ({getattr(inbox.Items,'Count',0)} items)")
+        sent = ns.GetDefaultFolder(5)
+        _r("Outlook Sent", True, f"{getattr(sent,'FolderPath','?')} ({getattr(sent.Items,'Count',0)} items)")
+        _r("Read-only access", True, "No mutations performed")
+    except Exception as e:
+        _r("Outlook COM", False, str(e)[:100])
+
+    # 6. Tesseract / OCR
+    from .evidence_pipeline import detect_tesseract
+    tess = detect_tesseract()
+    if tess.get("available"):
+        _r("Tesseract", True, f'{tess.get("version","")} at {tess.get("path","")}')
+        _r("English data", tess.get("eng_available", False), "eng.traineddata" if tess.get("eng_available") else "missing")
+        # Smoke test
+        try:
+            import pytesseract, PIL.Image
+            pytesseract.pytesseract.tesseract_cmd = tess["path"]
+            import os; os.environ["TESSDATA_PREFIX"] = tess.get("tessdata_path", "")
+            img = PIL.Image.new("RGB", (100, 30), color="white")
+            text = pytesseract.image_to_string(img, lang="eng")
+            _r("OCR smoke test", True, f"OK ({len(text.strip())} chars)")
+        except Exception as e:
+            _r("OCR smoke test", False, str(e)[:80])
+    else:
+        _r("Tesseract", False, tess.get("error", "not found"))
+
+    # 7. openpyxl smoke
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Test"
+        ws["A1"] = "SAMI"
+        _r("openpyxl create", True, f"version {openpyxl.__version__}")
+        wb.close()
+    except Exception as e:
+        _r("openpyxl create", False, str(e)[:80])
+
+    # 8. Local model
+    from .ollama_client import check_ollama, check_model_available
+    _, settings = _load_settings()
+    ollama_ok, ollama_msg, models = check_ollama(settings.ollama_base_url)
+    _r("Ollama reachable", ollama_ok, ollama_msg)
+    if ollama_ok:
+        model_ok, model_msg = check_model_available(settings.ollama_base_url, settings.ollama_model)
+        _r(f"Model {settings.ollama_model}", model_ok, model_msg if not model_ok else "available")
+        # JSON mode test
+        from .ollama_client import generate
+        try:
+            ok, msg, parsed = generate(
+                base_url=settings.ollama_base_url, model=settings.ollama_model,
+                system_prompt="Return JSON.", user_prompt='{"t":1}', timeout=10,
+            )
+            _r("JSON mode test", ok, "structured output works" if ok else msg[:80])
+        except Exception as e:
+            _r("JSON mode test", False, str(e)[:80])
+
+    # 9. Safety
+    _r("mailbox_search_enabled=False", not settings.mailbox_search_enabled,
+       f"enabled={settings.mailbox_search_enabled}")
+    _r("mailbox_search_recent_days=180", settings.mailbox_search_recent_days == 180,
+       f"days={settings.mailbox_search_recent_days}")
+    _r("allow_kanban_apply=False", not settings.allow_kanban_apply,
+       f"allowed={settings.allow_kanban_apply}")
+    _r("local_kanban_apply_enabled=False", not settings.local_kanban_apply_enabled,
+       f"enabled={settings.local_kanban_apply_enabled}")
+    _r("team_kanban_apply_enabled=False", not settings.team_kanban_apply_enabled,
+       f"enabled={settings.team_kanban_apply_enabled}")
+
+    local_blocked = is_forbidden_path(str(settings.kanban_local_path()))
+    _r("Local path guarded", local_blocked, f"blocked={local_blocked}")
+
+    console.print(table)
+    console.print(f"\n[bold]{'All checks passed!' if failed == 0 else f'{failed} check(s) failed'} "
+                   f"({passed} passed, {failed} failed, {warnings} warnings)[/bold]")
+    if failed > 0:
+        raise typer.Exit(1)
+
+
+@app.command(name="evidence-search")
+def evidence_search(
+    project_id: str = typer.Argument(..., help="Kanban project ID, e.g. card-001-nt-ultrarad-stroke-vpn-firewall-rules"),
+    card_title: str = typer.Option("", "--title", "-t", help="Card title for search context"),
+    body_search: bool = typer.Option(False, "--body-search", help="Also run body keyword search (slower)"),
+    max_results: int = typer.Option(10, "--max", "-m", help="Max results from body fallback search"),
+):
+    """Run read-only mailbox evidence search for a Kanban card."""
+    from .evidence_pipeline import run_evidence_search
+
+    _, settings = _load_settings()
+    console.print(f"[bold cyan]Evidence search:[/bold cyan] {project_id}")
+
+    # Build subject patterns from project ID
+    parts = project_id.replace("card-", "").split("-")
+    patterns = [project_id.replace("-", " ")]
+    # Add SRV/REQ patterns from the id
+    patterns.append(project_id)
+
+    console.print(f"  Subject patterns: {patterns[:3]}...")
+    console.print(f"  Body search: {body_search}")
+    console.print()
+
+    result = run_evidence_search(
+        settings=settings,
+        card_title=card_title or project_id,
+        card_project_id=project_id,
+        subject_patterns=patterns,
+        body_keywords=parts if body_search else None,
+        max_body_search=max_results,
+    )
+
+    status = result.get("search_status", "error")
+    strength = result.get("evidence_strength", "none")
+    run_dir = result.get("run_dir", "")
+    att_count = len(result.get("attachments", []))
+    inbox_n = len(result.get("search_results", {}).get("inbox_matches", []))
+    sent_n = len(result.get("search_results", {}).get("sent_matches", []))
+
+    console.print(f"\n  [bold]Status:[/bold] {status}")
+    console.print(f"  [bold]Strength:[/bold] {strength}")
+    console.print(f"  [bold]Messages:[/bold] {inbox_n} inbox, {sent_n} sent")
+    console.print(f"  [bold]Attachments:[/bold] {att_count}")
+    console.print(f"  [bold]Run dir:[/bold] {run_dir}")
+
+    # Show attachment summary
+    if att_count:
+        console.print("\n  [bold]Attachment evidence:[/bold]")
+        for a in result.get("attachments", []):
+            tm = a.get("term_matches", {})
+            srv = ", ".join(tm.get("srv", [])[:3])
+            ips = ", ".join(tm.get("ips", [])[:3])
+            label = f"{a.get('original_filename','?')} ({a.get('parse_status','?')})"
+            if srv or ips:
+                console.print(f"    [green]✓[/green] {label}")
+                if srv: console.print(f"       SRV: {srv}")
+                if ips: console.print(f"       IPs: {ips}")
+            else:
+                console.print(f"    [dim]•[/dim] {label}")
+
+    console.print(f"\n[green]Search complete.[/green] Run [bold]evidence-show-run {run_dir.split('/')[-1]}[/bold] for details.")
+
+
+@app.command(name="evidence-build-draft")
+def evidence_build_draft(
+    run_id_or_path: str = typer.Argument(..., help="Evidence run ID (folder name) or full path"),
+):
+    """Generate a human-review draft from gathered evidence using local model."""
+    from datetime import datetime
+    import json
+    from .local_ai_adviser import generate_structured_advice
+
+    _, settings = _load_settings()
+    run_path = Path(run_id_or_path)
+    if not run_path.is_absolute():
+        run_path = _REPO_ROOT / "runtime" / "apply" / "evidence" / run_id_or_path
+    if not run_path.exists():
+        console.print(f"[red]Run path not found:[/red] {run_path}")
+        raise typer.Exit(1)
+
+    model_input_path = run_path / "local_model_input.json"
+    if not model_input_path.exists():
+        console.print(f"[red]No model input found at {model_input_path}[/red]")
+        console.print("  Run evidence-search first to gather evidence.")
+        raise typer.Exit(1)
+
+    console.print(f"[bold cyan]Building draft from:[/bold cyan] {run_path.name}")
+    output_path = run_path / "local_model_output.json"
+    draft_root = _REPO_ROOT / "runtime" / "apply" / "drafts"
+
+    result = generate_structured_advice(
+        model_input_path=model_input_path,
+        settings=settings,
+        output_path=output_path,
+    )
+
+    if result.get("success"):
+        out = result.get("output", {})
+        console.print(f"  [green]Confidence:[/green] {out.get('confidence', '?')}")
+        console.print(f"  [green]Recommendation:[/green] {out.get('apply_recommendation', '?')}")
+        cs = out.get("current_state_draft", "")
+        if cs:
+            console.print(f"  [bold]Current state:[/bold] {cs[:300]}")
+        na = out.get("next_action_draft", "")
+        if na:
+            console.print(f"  [bold]Next action:[/bold] {na[:300]}")
+        console.print(f"  [bold]Status:[/bold] {out.get('status_recommendation', '?')}  "
+                       f"[bold]Risk:[/bold] {out.get('risk_recommendation', '?')}")
+        console.print(f"  [bold]Evidence items:[/bold] {len(out.get('evidence_items', []))}")
+        console.print(f"  [bold]Missing evidence:[/bold] {len(out.get('missing_evidence', []))}")
+
+        # Write draft
+        draft = {
+            "run_id": run_path.name,
+            "generated_at": datetime.now().isoformat(),
+            "card_id": out.get("card_id_or_title", ""),
+            "card_title": out.get("card_id_or_title", ""),
+            "search_status": out.get("search_status", ""),
+            "evidence_strength": out.get("evidence_strength", ""),
+            "model_output": out,
+            "mailboxMutated": False,
+            "kanbanWritePerformed": False,
+            "teamEsmiWritePerformed": False,
+            "requiresHumanApproval": True,
+        }
+        draft_path = draft_root / f"draft_{run_path.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        draft_path.parent.mkdir(parents=True, exist_ok=True)
+        draft_path.write_text(json.dumps(draft, indent=2, ensure_ascii=False, default=str))
+        console.print(f"\n[green]Draft saved:[/green] {draft_path}")
+    else:
+        console.print(f"[red]Draft failed:[/red] {result.get('error', 'unknown')}")
+        raise typer.Exit(1)
+
+
+@app.command(name="evidence-show-run")
+def evidence_show_run(
+    run_id_or_path: str = typer.Argument(..., help="Evidence run ID or full path"),
+):
+    """Display a prior evidence run summary."""
+    import json
+    run_path = Path(run_id_or_path)
+    if not run_path.is_absolute():
+        run_path = _REPO_ROOT / "runtime" / "apply" / "evidence" / run_id_or_path
+    if not run_path.exists():
+        console.print(f"[red]Run not found:[/red] {run_path}")
+        raise typer.Exit(1)
+
+    console.print(f"[bold cyan]Evidence run:[/bold cyan] {run_path.name}")
+
+    manifest_path = run_path / "evidence_manifest.json"
+    if manifest_path.exists():
+        m = json.loads(manifest_path.read_text(encoding="utf-8"))
+        console.print(f"  Timestamp: {m.get('timestamp','?')}")
+        console.print(f"  Status: {m.get('search_results',{}).get('classified_status','?')}")
+        console.print(f"  Strength: {m.get('search_results',{}).get('evidence_strength','?')}")
+        console.print(f"  Inbox: {m.get('search_results',{}).get('inbox_messages_matched',0)} matched")
+        console.print(f"  Sent: {m.get('search_results',{}).get('sent_messages_matched',0)} matched")
+        console.print(f"  Attachments: {m.get('attachments',{}).get('total_extracted',0)} total, "
+                       f"{m.get('attachments',{}).get('saved_count',0)} saved, "
+                       f"{m.get('attachments',{}).get('parsed_count',0)} parsed")
+        saf = m.get("safety", {})
+        console.print(f"  Hash unchanged: {saf.get('hash_unchanged','?')}")
+        console.print(f"  mailboxMutated: {saf.get('mailboxMutated','?')}")
+    else:
+        console.print("  (no manifest)")
+
+    # Show model output
+    mo = run_path / "local_model_output.json"
+    if mo.exists():
+        o = json.loads(mo.read_text(encoding="utf-8")).get("output", {})
+        console.print(f"\n  [bold]Model:[/bold]")
+        console.print(f"    Confidence: {o.get('confidence','?')}")
+        console.print(f"    Recommendation: {o.get('apply_recommendation','?')}")
+        cs = o.get("current_state_draft","")
+        if cs: console.print(f"    State: {cs[:200]}")
+        na = o.get("next_action_draft","")
+        if na: console.print(f"    Action: {na[:200]}")
+        console.print(f"    Status: {o.get('status_recommendation','?')} / Risk: {o.get('risk_recommendation','?')}")
+
+    # Show attachments
+    ai = run_path / "attachment_index.json"
+    if ai.exists():
+        atts = json.loads(ai.read_text(encoding="utf-8"))
+        console.print(f"\n  [bold]Attachments ({len(atts)}):[/bold]")
+        for a in atts:
+            if a.get("parse_status") == "parsed":
+                tm = a.get("term_matches", {})
+                srv = ", ".join(tm.get("srv",[])[:3])
+                ips = ", ".join(tm.get("ips",[])[:3])
+                console.print(f"    [green]{a.get('original_filename','?')}[/green]"
+                              f"{' SRV:'+srv if srv else ''}{' IPs:'+ips if ips else ''}")
+
+    # Show sitrep
+    sitrep_path = run_path / "sitrep.md"
+    if sitrep_path.exists():
+        console.print(f"\n  SITREP: {sitrep_path}")
+
+    console.print(f"\n  [dim]Run path: {run_path}[/dim]")
+
+
+@app.command(name="evidence-reset-workspace")
+def evidence_reset_workspace(
+    confirm: bool = typer.Option(False, "--confirm", help="Confirm reset"),
+    keep_preserved: bool = typer.Option(True, "--keep-preserved", help="Keep v10/v11/v12 evidence"),
+):
+    """Archive or clean temporary evidence workspace. Preserved evidence kept by default."""
+    from datetime import datetime
+    if not confirm:
+        console.print("[yellow]SAFETY:[/yellow] This will archive evidence runs. Use --confirm to proceed.")
+        console.print("  Preserved runs (v10/v11/v12) are kept by default with --keep-preserved.")
+        raise typer.Exit(0)
+
+    ev_root = _REPO_ROOT / "runtime" / "apply" / "evidence"
+    preserved = {"target_thread", "sr521202", "v12_ocr_sent"}
+    archived = 0
+    for d in sorted(ev_root.iterdir()):
+        if not d.is_dir():
+            continue
+        if keep_preserved and d.name in preserved:
+            continue
+        if d.name.startswith("ep_"):
+            archive_name = d.parent / f"{d.name}_archived_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            d.rename(archive_name)
+            archived += 1
+            console.print(f"  Archived: {d.name} → {archive_name.name}")
+
+    # Also clean drafts dir
+    drafts = _REPO_ROOT / "runtime" / "apply" / "drafts"
+    if drafts.exists():
+        for f in drafts.glob("draft_ep_*.json"):
+            f.unlink()
+            archived += 1
+            console.print(f"  Removed draft: {f.name}")
+
+    console.print(f"[green]Workspace reset: {archived} items processed.[/green]")
+    if keep_preserved:
+        console.print(f"  Preserved: {', '.join(sorted(preserved))}")
 def export_pilot_report():
     """Export a pilot-friendly Markdown report.
 

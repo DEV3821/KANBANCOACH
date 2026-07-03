@@ -643,3 +643,306 @@ def get_advice_log_summary(settings: Any) -> dict[str, Any]:
         "updateLogCount": update_count,
         "adviserEnabled": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# Structured evidence schema — phase 5 local-model output
+# ---------------------------------------------------------------------------
+
+LOCAL_MODEL_OUTPUT_SCHEMA = {
+    "type": "object",
+    "required": [
+        "card_id_or_title", "search_status", "evidence_strength", "confidence",
+        "current_state_draft", "next_action_draft", "status_recommendation",
+        "risk_recommendation", "evidence_items", "missing_evidence",
+        "conflicts_or_cautions", "apply_recommendation",
+        "requires_human_approval", "mailboxMutated", "kanbanWritePerformed",
+        "teamEsmiWritePerformed",
+    ],
+    "properties": {
+        "card_id_or_title": {"type": "string"},
+        "search_status": {"type": "string"},
+        "evidence_strength": {"type": "string", "enum": ["strong", "moderate", "weak", "inconclusive", "none"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "current_state_draft": {"type": "string"},
+        "next_action_draft": {"type": "string"},
+        "status_recommendation": {"type": "string", "enum": ["running", "backlog", "blocked", "completed", ""]},
+        "risk_recommendation": {"type": "string", "enum": ["red", "amber", "green", ""]},
+        "evidence_items": {"type": "array", "items": {"type": "string"}},
+        "missing_evidence": {"type": "array", "items": {"type": "string"}},
+        "conflicts_or_cautions": {"type": "array", "items": {"type": "string"}},
+        "apply_recommendation": {"type": "string", "enum": ["review_draft", "more_evidence_needed", "do_not_apply"]},
+        "requires_human_approval": {"type": "boolean", "const": True},
+        "mailboxMutated": {"type": "boolean", "const": False},
+        "kanbanWritePerformed": {"type": "boolean", "const": False},
+        "teamEsmiWritePerformed": {"type": "boolean", "const": False},
+    },
+}
+
+
+def _validate_model_output(output: dict) -> tuple[bool, list[str]]:
+    """Validate model output against the schema."""
+    errors = []
+    for field in LOCAL_MODEL_OUTPUT_SCHEMA["required"]:
+        if field not in output:
+            errors.append(f"missing required field: {field}")
+
+    # Type checks
+    type_map = {
+        "card_id_or_title": str, "search_status": str, "evidence_strength": str,
+        "confidence": (int, float), "current_state_draft": str, "next_action_draft": str,
+        "status_recommendation": str, "risk_recommendation": str,
+        "evidence_items": list, "missing_evidence": list, "conflicts_or_cautions": list,
+        "apply_recommendation": str, "requires_human_approval": bool,
+        "mailboxMutated": bool, "kanbanWritePerformed": bool, "teamEsmiWritePerformed": bool,
+    }
+    for field, expected_type in type_map.items():
+        if field in output:
+            if not isinstance(output[field], expected_type):
+                errors.append(f"{field}: expected {expected_type.__name__}, got {type(output[field]).__name__}")
+
+    # Const checks
+    const_fields = [
+        ("requires_human_approval", True),
+        ("mailboxMutated", False),
+        ("kanbanWritePerformed", False),
+        ("teamEsmiWritePerformed", False),
+    ]
+    for field, expected_val in const_fields:
+        if field in output and output[field] != expected_val:
+            errors.append(f"{field}: expected {expected_val}, got {output[field]}")
+
+    # Enum checks
+    enum_checks = [
+        ("evidence_strength", ["strong", "moderate", "weak", "inconclusive", "none"]),
+        ("status_recommendation", ["running", "backlog", "blocked", "completed", ""]),
+        ("risk_recommendation", ["red", "amber", "green", ""]),
+        ("apply_recommendation", ["review_draft", "more_evidence_needed", "do_not_apply"]),
+    ]
+    for field, valid_values in enum_checks:
+        if field in output and output[field] not in valid_values:
+            errors.append(f"{field}: '{output[field]}' not in {valid_values}")
+
+    return len(errors) == 0, errors
+
+
+def generate_structured_advice(
+    model_input_path: str | Path,
+    settings: Any,
+    output_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Generate structured advice from a local model input manifest.
+
+    Args:
+        model_input_path: Path to local_model_input.json from evidence pipeline.
+        settings: App settings object (for Ollama config).
+        output_path: Optional path to write the output JSON.
+
+    Returns:
+        Dict with the structured advice output.
+    """
+    model_input_path = Path(model_input_path)
+    if not model_input_path.exists():
+        return {"error": f"Model input not found: {model_input_path}"}
+
+    with open(model_input_path, "r", encoding="utf-8") as f:
+        model_input = json.load(f)
+
+    # Build the structured prompt
+    base_url = getattr(settings, "ollama_base_url", "http://127.0.0.1:11434")
+    model = getattr(settings, "ollama_model", "qwen3:8b")
+    timeout = getattr(settings, "ollama_timeout_seconds", 120)
+
+    evidence_summary = model_input.get("evidence_summary", {})
+    att_evidence = model_input.get("attachment_evidence", [])
+    inbox_count = evidence_summary.get("inbox_messages", 0)
+    sent_count = evidence_summary.get("sent_messages", 0)
+    att_count = evidence_summary.get("attachments", 0)
+
+    # Build prompt
+    prompt_parts = [
+        "You are a SAMI Kanban adviser. Analyse the following structured evidence and produce a human-reviewed draft.",
+        "",
+        f"Card: {model_input.get('card_title', '?')}",
+        f"Project ID: {model_input.get('card_id', '?')}",
+        f"Search status: {model_input.get('search_status', '?')}",
+        f"Evidence strength: {model_input.get('evidence_strength', '?')}",
+        f"Evidence sources: {inbox_count} inbox, {sent_count} sent messages, {att_count} attachments",
+        "",
+        "Attachment evidence:",
+    ]
+
+    for a in att_evidence[:10]:
+        fn = a.get("filename", "?")
+        ext = a.get("ext", "?")
+        status = a.get("parse_status", "?")
+        terms = a.get("all_terms", [])
+        prompt_parts.append(f"  - {fn} ({ext}) [{status}]")
+        if terms:
+            prompt_parts.append(f"    Terms: {', '.join(terms[:10])}")
+        if a.get("text_preview"):
+            prompt_parts.append(f"    Content: {a['text_preview'][:200]}")
+
+    prompt_parts.append("")
+    prompt_parts.append("""Return a JSON object with EXACTLY these fields:
+{
+  "card_id_or_title": "",
+  "search_status": "",
+  "evidence_strength": "strong|moderate|weak|inconclusive|none",
+  "confidence": 0.0,
+  "current_state_draft": "",
+  "next_action_draft": "",
+  "status_recommendation": "running|backlog|blocked|completed|",
+  "risk_recommendation": "red|amber|green|",
+  "evidence_items": [],
+  "missing_evidence": [],
+  "conflicts_or_cautions": [],
+  "apply_recommendation": "review_draft|more_evidence_needed|do_not_apply",
+  "requires_human_approval": true,
+  "mailboxMutated": false,
+  "kanbanWritePerformed": false,
+  "teamEsmiWritePerformed": false
+}""")
+
+    full_prompt = "\n".join(prompt_parts)
+    system = "You are a SAMI Kanban adviser producing structured card update drafts. Always return valid JSON."
+
+    try:
+        ok, msg, parsed = generate(
+            base_url=base_url,
+            model=model,
+            system_prompt=system,
+            user_prompt=full_prompt,
+            timeout=timeout,
+        )
+
+        if ok and isinstance(parsed, dict):
+            # Validate
+            valid, errors = _validate_model_output(parsed)
+            if not valid:
+                # Fix const fields
+                for field, val in [("requires_human_approval", True),
+                                   ("mailboxMutated", False),
+                                   ("kanbanWritePerformed", False),
+                                   ("teamEsmiWritePerformed", False)]:
+                    parsed[field] = val
+                parsed["_validation_errors"] = errors
+
+            # Fill defaults for any missing fields
+            for field in LOCAL_MODEL_OUTPUT_SCHEMA["required"]:
+                if field not in parsed:
+                    parsed[field] = "" if isinstance("", str) else []
+
+            result = {
+                "success": True,
+                "model": model,
+                "model_input_path": str(model_input_path),
+                "output": parsed,
+                "validation_errors": errors if not valid else [],
+            }
+        else:
+            # Fallback: build a minimal valid output
+            result = {
+                "success": True,
+                "model": model,
+                "model_input_path": str(model_input_path),
+                "output": {
+                    "card_id_or_title": model_input.get("card_title", ""),
+                    "search_status": model_input.get("search_status", "unknown"),
+                    "evidence_strength": model_input.get("evidence_strength", "none"),
+                    "confidence": 0.3,
+                    "current_state_draft": "[Awaiting human review — model parse failed]",
+                    "next_action_draft": "",
+                    "status_recommendation": "",
+                    "risk_recommendation": "",
+                    "evidence_items": [],
+                    "missing_evidence": [],
+                    "conflicts_or_cautions": [f"Model output could not be parsed: {msg[:200]}"],
+                    "apply_recommendation": "more_evidence_needed",
+                    "requires_human_approval": True,
+                    "mailboxMutated": False,
+                    "kanbanWritePerformed": False,
+                    "teamEsmiWritePerformed": False,
+                    "_fallback": True,
+                },
+                "_raw": msg,
+                "validation_errors": [],
+            }
+
+        # Write output
+        if output_path:
+            out = Path(output_path)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2, ensure_ascii=False, default=str)
+            print(f"  Structured advice written to {out}")
+
+        # Log to advice log
+        _log_advice(settings, {
+            "eventType": "structured_advice",
+            "cardId": model_input.get("card_id", ""),
+            "cardTitle": model_input.get("card_title", ""),
+            "runId": model_input.get("run_id", ""),
+            "model": model,
+            "searchStatus": model_input.get("search_status", ""),
+            "evidenceStrength": model_input.get("evidence_strength", ""),
+            "outputSummary": result.get("output", {}).get("current_state_draft", "")[:200],
+            "confidence": result.get("output", {}).get("confidence", 0),
+            "mailboxMutated": False,
+            "kanbanWritePerformed": False,
+        })
+
+        return result
+
+    except Exception as e:
+        result = {
+            "success": False,
+            "error": str(e),
+            "model": model,
+            "model_input_path": str(model_input_path),
+        }
+        return result
+
+
+def check_local_ai_status(settings: Any) -> dict[str, Any]:
+    """Check local AI backend status: Ollama reachable, model available, JSON mode."""
+    base_url = getattr(settings, "ollama_base_url", "http://127.0.0.1:11434")
+    model = getattr(settings, "ollama_model", "qwen3:8b")
+
+    # Check Ollama reachable
+    reachable, msg, models = check_ollama(base_url)
+
+    # Check specific model
+    model_ok = False
+    model_msg = ""
+    if reachable:
+        model_ok, model_msg = check_model_available(base_url, model)
+
+    # Test JSON mode with a simple prompt
+    json_mode = False
+    test_msg = ""
+    if reachable and model_ok:
+        try:
+            ok, m, parsed = generate(
+                base_url=base_url,
+                model=model,
+                system_prompt="You are a helpful assistant. Return only JSON.",
+                user_prompt='{"test": "hello"}',
+                timeout=10,
+            )
+            json_mode = ok
+            test_msg = "JSON mode test passed" if ok else f"JSON test: {m[:100]}"
+        except Exception as e:
+            test_msg = f"Test error: {e}"
+
+    return {
+        "ollama_reachable": reachable,
+        "ollama_msg": msg,
+        "models_available": models,
+        "model_configured": model,
+        "model_available": model_ok,
+        "model_msg": model_msg,
+        "json_mode_available": json_mode,
+        "test_response": test_msg,
+        "base_url": base_url,
+    }
