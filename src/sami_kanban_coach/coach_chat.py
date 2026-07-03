@@ -34,6 +34,36 @@ QUERY_STOPWORDS = {
     "on", "project", "sami", "show", "should", "state", "status", "the", "to", "what", "whats", "what's",
 }
 
+# Phrases that are purely low-information — respond socially, skip retrieval
+_LOW_INFO_PHRASES = frozenset({
+    "hello", "hi", "hey", "good morning", "good afternoon", "good evening",
+    "howdy", "greetings", "yo", "sup", "hiya",
+    "thanks", "thank you", "cheers", "ty", "thx",
+    "test", "testing", "are you there", "you there", "hello mr kanban",
+    "hi mr kanban", "hey mr kanban", "mr kanban", "ok", "k", "done",
+})
+
+
+def is_low_information_prompt(text: str) -> bool:
+    """Return True if the prompt is a greeting or low-info message that should bypass retrieval.
+
+    Examples that return True:
+      hello, hi, hey, good morning, thanks, test, are you there
+    Examples that return False:
+      what needs update, review the NT UltraRad card, find email context for Zed
+    """
+    t = text.strip().lower()
+    # Single word matches
+    if t in _LOW_INFO_PHRASES:
+        return True
+    # Multi-word: check if every significant word is a greeting/meta word
+    words = [w for w in t.split() if w not in QUERY_STOPWORDS and len(w) >= 2]
+    if not words:
+        return True  # no substantive content
+    if all(w in _LOW_INFO_PHRASES for w in words):
+        return True
+    return False
+
 
 @dataclass
 class ChatSource:
@@ -788,6 +818,20 @@ def render_status(console: Console, settings: Any, state: ChatState | None = Non
     console.print("[green]Safety: Team ESMI untouched. Mailbox writes impossible in this harness.[/green]")
 
 
+def render_greeting(console: Console) -> None:
+    """Print a friendly greeting with no Kanban/email context retrieval."""
+    console.print(Rule("Mr Kanban", style=SAMI_TEAL))
+    console.print(
+        "Hi Brian — Mr Kanban is online.\n\n"
+        "I can help review stale cards, check project context, build draft "
+        "recommendations, or look for read-only email evidence when you "
+        "explicitly ask.\n\n"
+        "What card or project do you want to look at?"
+    )
+    console.print()
+    console.print("[dim]Type /help for commands.[/dim]", style="bold")
+
+
 def render_sources(console: Console, state: ChatState) -> None:
     if not state.sources:
         console.print("[yellow]No sources yet. Ask a question first.[/yellow]")
@@ -822,11 +866,13 @@ def render_answer(console: Console, state: ChatState, response: dict[str, Any]) 
     console.print("\n[bold]Evidence:[/bold]")
     ev = response.get("evidence", []) or []
     if ev:
-        for item in ev[:12]:
-            console.print(f"- {str(item)[:500]}")
+        for item in ev[:6]:  # cap at 6
+            txt = str(item)[:300]
+            console.print(f"- {txt}")
     else:
-        for src in state.sources[:8]:
-            console.print(f"- {src.kind}: {src.summary[:500]}")
+        for src in state.sources[:5]:  # cap at 5
+            txt = src.summary[:200]
+            console.print(f"- {src.kind}: {txt}")
     console.print("\n[bold]Recommendation:[/bold]")
     console.print(str(response.get("recommendation", "Review evidence before local sandbox update.")))
     console.print("\n[bold]Confidence:[/bold]")
@@ -1000,6 +1046,10 @@ def interactive_loop(settings: Any, console: Console | None = None) -> None:
             continue
         if raw.startswith("/search "):
             raw = raw[len("/search "):].strip()
+        # Greeting/low-info guard — bypass retrieval entirely
+        if is_low_information_prompt(raw):
+            render_greeting(console)
+            continue
         state = build_context(settings, raw)
         response = build_draft(settings, state)
         render_answer(console, state, response)

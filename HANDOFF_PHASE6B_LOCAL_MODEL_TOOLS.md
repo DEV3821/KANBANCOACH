@@ -272,3 +272,162 @@ Custom script `hermes-verify-deps-<random>.py` created under `%TEMP%`, run, and 
 4. **Tesseract not on PATH** — Must use absolute path `C:\Tools\Tesseract-OCR\tesseract.exe`; the `evidence-status` command finds it correctly.
 5. **Ollama not on PATH** — Available via HTTP at localhost:11434; `ollama.exe` not in any PATH.
 6. **Account switching** — If switching between `sshawb` and `sshawbadmin` profiles, `.venv/pyvenv.cfg` may need the `home` path updated again.
+
+---
+
+## Phase 6E Addendum — Mr Kanban Chat End-to-End Test
+
+Performed 2026-07-04 under `sshawbadmin` account.
+
+### Root Cause: Smoke Test Timeout
+
+The `coach-chat --smoke-test` was timing out because the default `ollama_timeout_seconds = 60` in `config/settings.json` was too short. Direct Ollama API testing confirmed:
+
+| Model | Response Time | Result |
+|-------|--------------|--------|
+| `qwen3:8b` (8.2B) | **62.9s** | `"Mr Kanban is now ready."` |
+| `llama3.2:3b` (3.2B) | Not tested (Qwen worked) | — |
+
+### Fix Applied
+
+Changed `ollama_timeout_seconds` from 60 to 120 in `config/settings.json` (local-only — file is gitignored).
+
+The setting is read by `coach_chat.py` line 562 via `getattr(settings, "ollama_timeout_seconds", 60)` and the Pydantic `Settings` model at `config.py` line 146 with default 60. The JSON value overrides the default.
+
+### Chat Test Results
+
+| Command | Result | Detail |
+|---------|--------|--------|
+| `coach-chat --smoke-test` | ✅ **PASS** | Model reachable, sandbox apply+undo, 17 sources, Team ESMI untouched |
+| `coach-dry-run` | ✅ **PASS** | 5 drafts, 2 plan items, 2 approved, 2 conflicts, 0 dry-applied, hash unchanged |
+| `local-ai-status` (16 checks) | ✅ **16/16 PASS** | Ollama reachable, qwen3:8b available, mailbox disabled, Team ESMI offline |
+| `ollama-doctor` | ✅ Available | — |
+
+### Smoke Test Details
+
+- **Model:** qwen3:8b via Ollama at localhost:11434
+- **Timeout:** 120s (was 60s — increased to accommodate Qwen's ~63s response)
+- **Sources used:** 17 (local sandbox card + evidence runs + mailbox search + attachments)
+- **Sandbox apply:** `nextAction` changed then restored by undo
+- **Team ESMI:** untouched (offline/unavailable in current network)
+- **Mailbox search:** used in read-only mode (disabled by default)
+
+### Dry-Run Details
+
+- **Items:** 5 drafts → 2 plan items → 2 approved → 2 conflicts
+- **Write count:** 0 (read-only simulation)
+- **Kanban hash before/after:** identical ✅
+- **Report exported** to `runtime/apply/data/kanban_coach_pilot_report_*.md`
+
+### Safety Verification
+
+All gates confirmed disabled:
+```
+allow_kanban_apply=false
+local_kanban_apply_enabled=false
+team_kanban_apply_enabled=false
+mailbox_search_enabled=false
+mailbox_write_enabled=false
+team_esmi_write_enabled=false
+mailbox_search_read_only=true
+kanban_apply_target=local_sandbox
+ollama_timeout_seconds=120
+```
+
+Kanban hash: `3e01e9af...` — **unchanged**.
+
+### Ad-hoc Verification
+
+Custom script `hermes-verify-chat-<random>.py` under `%TEMP%`:
+- **19/19 PASS**
+- Temp files cleaned, confirmed gone
+
+### Commitable Changes
+
+- `config/settings.json` — `ollama_timeout_seconds` changed from 60 to 120
+  - **File is gitignored** — cannot be committed. Local-only.
+
+### Remaining Risks
+
+1. **Qwen is slow** (~63s first response). Consider `llama3.2:3b` for faster interaction, or accept the delay.
+2. **Settings file is gitignored** — each new clone/environment needs `ollama_timeout_seconds=120` added locally.
+3. **GitHub push blocked** — 4 commits ahead, unpushed.
+
+---
+
+## Phase 6F Addendum — Greeting Guard and Safer Evidence
+
+Performed 2026-07-04 under `sshawbadmin` account.
+
+### Problem
+
+Mr Kanban was performing full Kanban/email context retrieval for every prompt, including greetings. Typing `hello mr kanban` would:
+- Search Kanban sandbox and pick an unrelated card (Zed Messenger Enhancements)
+- Search email evidence and expose patient/ticket-style snippets
+- Produce a recommendation and confidence score for an empty query
+
+This was a safety/privacy concern — email evidence could contain patient-identifying information.
+
+### Fix: Greeting/Low-Information Guard
+
+Added `is_low_information_prompt()` in `coach_chat.py`:
+
+```python
+_LOW_INFO_PHRASES = frozenset({
+    "hello", "hi", "hey", "good morning", "good afternoon", "good evening",
+    "howdy", "greetings", "yo", "sup", "hiya",
+    "thanks", "thank you", "cheers", "ty", "thx",
+    "test", "testing", "are you there", "you there", "hello mr kanban",
+    "hi mr kanban", "hey mr kanban", "mr kanban", "ok", "k", "done",
+})
+```
+
+Detection logic:
+1. Exact match against `_LOW_INFO_PHRASES`
+2. Empty/no-meaningful-word check
+3. All-word check (every significant word is a greeting phrase)
+
+**Verified behaviour:**
+
+| Input | Low-Info? | Result |
+|-------|-----------|--------|
+| `hello`, `hi`, `hey` | ✅ True | Friendly greeting, no retrieval |
+| `good morning`, `thanks` | ✅ True | Friendly greeting, no retrieval |
+| `are you there`, `test` | ✅ True | Friendly greeting, no retrieval |
+| `hello mr kanban` (any case) | ✅ True | Friendly greeting, no retrieval |
+| `what needs update` | ❌ False | Full retrieval as normal |
+| `review the NT UltraRad card` | ❌ False | Full retrieval as normal |
+| `what stale cards need attention` | ❌ False | Full retrieval as normal |
+
+### Fix: Safer Evidence Display
+
+In `render_answer()`:
+- **Evidence cap**: reduced from 12 to 6 items
+- **Evidence truncation**: reduced from 500 to 300 chars per item
+- **Source summary cap**: reduced from 8 to 5 items
+- **Source truncation**: reduced from 500 to 200 chars
+
+All changes keep evidence useful while preventing accidental patient-data dumps.
+
+### Test Results
+
+| Check | Result |
+|-------|--------|
+| `compileall src/sami_kanban_coach` | ✅ PASS |
+| `cli --help` | ✅ PASS |
+| `local-ai-status` (16 checks) | ✅ 16/16 PASS |
+| Greeting guard: 10 greetings → bypass | ✅ 10/10 PASS |
+| Greeting guard: 5 real queries → retrieve | ✅ 5/5 PASS |
+| Safety gates | ✅ All disabled |
+| Kanban hash | ✅ Unchanged |
+| Temp verifier | ✅ Written, run, deleted, confirmed gone |
+
+### Files Changed
+
+- `src/sami_kanban_coach/coach_chat.py` — greeting guard + safer evidence display
+
+### Commit
+
+```text
+f6599dd..XXXXXXXX Guard Mr Kanban chat greetings and evidence output
+```
