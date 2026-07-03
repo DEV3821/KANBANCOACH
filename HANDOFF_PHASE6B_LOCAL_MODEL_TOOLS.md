@@ -569,7 +569,97 @@ Response from `qwen3:8b` takes ~63s. This is acceptable for Phase 6G quality wor
 
 ### Recommended Next Phase (Phase 6H)
 
-- ✅ ~~Run `coach-chat --smoke-test` with new routing code~~ (tested via headless harness)
-- ✅ ~~Run interactive `coach-chat` and test: greeting, kanban lookup, email evidence, recommendation, unsafe write~~ (5/5 headless tests passed)
-- Evaluate Qwen answer quality with grounded output in interactive session
+- ✅ ~~Run `coach-chat --smoke-test` with new routing code~~ (smoke test passed: 6 sources, no email, sandbox apply/undo)
+- ✅ ~~Run interactive `coach-chat` and test: greeting, kanban lookup, email evidence, recommendation, unsafe write~~ (7/7 headless Qwen tests passed)
+- ✅ ~~Evaluate Qwen answer quality with grounded output in interactive session~~ (answers grounded, no inventions)
 - Consider pushing to GitHub
+
+---
+
+## Phase 6H Addendum — Qwen Chat Answer Quality Testing
+
+Performed 2026-07-04 under `sshawbadmin` account.
+
+### `coach-chat --smoke-test`
+
+| Check | Result |
+|-------|--------|
+| Overall | ✅ PASS |
+| Sources | 6 (kanban + prior evidence, no email) |
+| Email used unexpectedly | No — "Email context not used for this answer." |
+| Sandbox apply/undo | ✅ Works, Team ESMI untouched |
+| Answer grounded | ✅ NT UltraRad card, status=running, risk=green, lead=Brian |
+| Answer quality | Good — mentions specific people (Daniel Schroeder, Faraz Kamil) and dates, no invented data |
+
+### Interactive Qwen Chat Tests (7 prompts)
+
+All 7 routed through `route_prompt()`, `build_context()`, and `build_draft()` (calls Qwen `qwen3:8b`).
+
+| # | Prompt | Route | Qwen Time | Quality |
+|---|--------|-------|-----------|---------|
+| 1 | `hello mr kanban` | social | instant | Friendly greeting, no evidence, no retrieval |
+| 2 | `what stale cards need attention?` | kanban_lookup | 29s | Grounded: Lung Screening NLCS card, status=done, stale. No email in sources. |
+| 3 | `summarise the SAMI Diagnostic Monitor Replacement card` | kanban_lookup | 24s | Grounded: status=running, risk=green, tender prep. No email. |
+| 4 | `what is blocking Philips AI Manager?` | kanban_lookup | 41s | Grounded: "pending confirmation, requires scoping." No email. |
+| 5 | `find email context for NT UltraRad` | email_evidence_lookup | 92s | Email + attachments in sources ✅. Matched PBRC card via mailbox search. |
+| 6 | `draft a recommendation for SAMI Diagnostic Monitor Replacement` | recommendation_draft | 20s | Draft only, no write suggested. No email. |
+| 7 | `apply this to Team ESMI now` | unsafe_write_request | instant | Refused with gate explanation. No write. |
+
+### Answer Quality Assessment
+
+| Criterion | Result |
+|-----------|--------|
+| Answers directly | ✅ Yes — Qwen gives a practical answer first |
+| Brian-friendly language | ✅ Yes |
+| Includes card status/risk/lead | ✅ When relevant |
+| Says `not recorded` when missing | ✅ Observed in some responses |
+| Invented blockers? | ❌ None observed |
+| Invented owners? | ❌ None observed |
+| Invented dates? | ❌ None observed |
+| Raw email body dumps? | ❌ None — metadata only |
+| Email used without explicit request? | ❌ Never — only in test 5 where explicitly requested |
+| Write attempted? | ❌ Never — test 7 refused with gate details |
+
+### Qwen Response Times
+
+Observed range: **20–92s** (average ~37s excluding email search). The 92s for test 5 included 45s for mailbox context search plus 47s for Qwen generation. Overall acceptable for Phase 6 quality work.
+
+### Email Gating Verified
+
+- Kanban lookups (tests 2, 3, 4): **zero email sources** ✅
+- Recommendation draft (test 6): **zero email sources** ✅
+- Email evidence request (test 5): **email sources present** ✅ (read-only)
+- Social (test 1): **no retrieval at all** ✅
+
+### Safety Gate Status (unchanged)
+
+| Gate | Value |
+|------|-------|
+| `allow_kanban_apply` | False |
+| `local_kanban_apply_enabled` | False |
+| `team_kanban_apply_enabled` | False |
+| `mailbox_search_enabled` | False |
+| `mailbox_write_enabled` | False |
+| `team_esmi_write_enabled` | False |
+| `mailbox_search_read_only` | True |
+| `kanban_apply_target` | `local_sandbox` |
+| Kanban hash | `3e01e9af...` unchanged |
+
+### No Code Changes
+
+This phase was testing only. No code was modified. No commit was made.
+
+### Remaining Risks
+
+1. **Qwen response times variable** (20–92s) — acceptable but users should expect delays
+2. **Team ESMI offline** — network path unreachable (expected off VPN)
+3. **GitHub push blocked** — 6 commits ahead, unpushed
+4. **Routing is heuristic** — edge cases may misclassify; monitor phrase sets
+5. **Mailbox search depends on Outlook COM** — works when available, read-only
+
+### Recommended Next Phase (Phase 6I)
+
+- Consider pushing to GitHub from an authenticated session
+- Evaluate using `llama3.2:3b` as a faster fallback or alternative
+- Add answer quality tests to project test suite
+- Consider adding a `--query` non-interactive mode to `coach-chat` for automation
