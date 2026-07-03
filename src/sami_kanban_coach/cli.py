@@ -2663,6 +2663,145 @@ def coach_dry_run():
         raise typer.Exit(1) from e
 
 
+# ===========================================================================
+# Phase 5 commands — Local Qwen AI Adviser
+# ===========================================================================
+
+
+@app.command(name="local-ai-status")
+def local_ai_status():
+    """Check local Qwen adviser status.
+
+    Shows adviser enabled/disabled, Ollama reachable, configured model,
+    model available, email context settings, Team ESMI context polling,
+    and log file paths. Does NOT send any card/email data to Ollama.
+    """
+    from rich.table import Table
+    from .ollama_client import check_ollama, check_model_available
+    from .local_ai_adviser import adviser_is_available, get_advice_log_summary
+    from .team_context_sync import get_team_context_status
+    from .email_context_loader import discover_email_context_folder
+
+    _, settings = _load_settings()
+
+    table = Table(title="Local Qwen Adviser — Phase 5 Status", show_header=True)
+    table.add_column("Check", style="cyan")
+    table.add_column("Result", style="bold")
+    table.add_column("Detail")
+
+    passed = 0
+    failed = 0
+
+    def _r(name, ok, detail):
+        nonlocal passed, failed
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+        table.add_row(name, "PASS" if ok else ("WARN" if ok else "FAIL"), detail)
+
+    def _w(name, detail):
+        nonlocal passed
+        passed += 1
+        table.add_row(name, "WARN", detail)
+
+    # 1. Adviser enabled
+    enabled = getattr(settings, "ollama_enabled", True)
+    _r("Adviser enabled", enabled,
+       "ollama_enabled=true" if enabled else "ollama_enabled=false — adviser disabled")
+
+    # 2. Ollama reachable
+    base_url = str(settings.ollama_base_url).rstrip("/")
+    model = str(settings.ollama_model)
+    reachable, msg, models = check_ollama(base_url, timeout=5)
+    _r("Ollama endpoint reachable", reachable,
+       f"{base_url} — {msg}" if reachable else msg)
+
+    # 3. Configured model
+    _w("Configured model", f"'{model}'")
+
+    # 4. Model available
+    if reachable:
+        model_ok, model_msg = check_model_available(base_url, model, timeout=5)
+        _r(f"Model '{model}' available", model_ok, model_msg)
+        if models:
+            _w("Available models", ", ".join(models[:5]) + ("..." if len(models) > 5 else ""))
+    else:
+        _r(f"Model '{model}' available", False, "Cannot check — endpoint unreachable")
+
+    # 5. Email context enabled
+    email_enabled = getattr(settings, "local_ai_email_context_enabled", True)
+    _r("Email context enabled", email_enabled,
+       "local_ai_email_context_enabled=true" if email_enabled else "disabled")
+
+    # 6. Email context folder
+    email_folder = discover_email_context_folder(settings)
+    if email_folder:
+        _r("Email context folder", True, str(email_folder))
+    else:
+        _w("Email context folder", "Not found — email context will be empty")
+
+    # 7. Team ESMI polling enabled
+    poll_enabled = getattr(settings, "team_esmi_context_poll_enabled", True)
+    _r("Team ESMI polling enabled", poll_enabled,
+       "team_esmi_context_poll_enabled=true" if poll_enabled else "disabled")
+
+    # 8. Team ESMI context cache status
+    team_status = get_team_context_status(settings)
+    if team_status.get("reachable"):
+        _r("Team ESMI reachable", True,
+           f"hash={team_status.get('cachedHash','')[:16]}..., "
+           f"mtime={team_status.get('cachedMtime','')[:19]}")
+    else:
+        _w("Team ESMI reachable", "Not accessible in current network context")
+
+    # 9. Mailbox search status
+    print("")
+    mailbox_enabled = getattr(settings, "mailbox_search_enabled", False)
+    _r("Mailbox search enabled", True,
+       f"mailbox_search_enabled={'true' if mailbox_enabled else 'false'}")
+
+    mailbox_provider = getattr(settings, "mailbox_search_provider", "disabled")
+    _w("Mailbox provider", mailbox_provider)
+
+    if mailbox_enabled:
+        from .mailbox_search import get_mailbox_search_status
+        mb_status = get_mailbox_search_status(settings)
+        _r("Provider available", mb_status.get("mailboxSearchAvailable"),
+           mb_status.get("mailboxSearchAvailableMsg", ""))
+        _w("Recent days window", f"{mb_status.get('mailboxSearchRecentDays', 180)} days")
+        _w("Max results", str(mb_status.get("mailboxSearchMaxResults", 10)))
+        sp = mb_status.get("snapshotPath", "")
+        if sp:
+            _r("Snapshot path", True, f"{sp} ({mb_status.get('snapshotCount', 0)} records)")
+        _r("Read-only mode", mb_status.get("mailboxSearchReadOnly") is True,
+           "mailbox_search_read_only=true")
+    else:
+        _w("Mailbox search", "Disabled by default — enable with mailbox_search_enabled=true")
+
+    # 10. Local context cache path
+    cache_path = team_status.get("contextCachePath", "")
+    if cache_path:
+        _r("Local context cache", Path(cache_path).exists() or True, cache_path)
+
+    # 10. Local AI logs
+    log_summary = get_advice_log_summary(settings)
+    _r("Advice log", bool(log_summary.get("adviceLogPath")),
+       f"{log_summary.get('adviceLogPath','')} ({log_summary.get('adviceLogCount',0)} records)")
+    _r("Update log", bool(log_summary.get("updateLogPath")),
+       f"{log_summary.get('updateLogPath','')} ({log_summary.get('updateLogCount',0)} records)")
+
+    # 11. Safety note
+    _w("Safety", "This command does NOT send card/email data to Ollama. Read-only check only.")
+
+    console.print(table)
+    console.print(f"\\n[bold]{'All checks passed!' if failed == 0 else f'{failed} check(s) failed'} "
+                   f"({passed} passed, {failed} failed)[/bold]")
+    if failed > 0:
+        raise typer.Exit(1)
+    console.print("\\n[bold green]local-ai-status complete.[/bold green]")
+
+
 @app.command(name="export-pilot-report")
 def export_pilot_report():
     """Export a pilot-friendly Markdown report.

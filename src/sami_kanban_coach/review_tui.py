@@ -29,6 +29,14 @@ from .apply_engine import (
     is_smoke_decision,
 )
 from .kanban_reader import find_projects_json
+from .local_ai_adviser import (
+    ask_adviser,
+    accept_advice,
+    discard_advice,
+    get_advice_log_summary,
+)
+from .email_context_loader import load_email_context
+from .team_context_sync import poll_team_context, load_latest_card_context
 
 console = Console()
 
@@ -38,7 +46,7 @@ console = Console()
 
 CONTROLS_HELP = (
     "n Next | p Previous | a Approve | s Skip | e Needs edit | "
-    "r Reason | v Full view | m Summary | x Export | q Quit"
+    "r Reason | v Full view | G Ask Qwen adviser | m Summary | x Export | q Quit"
 )
 
 SAFETY_NOTE = "[dim]Read-only review: decisions are recorded, Kanban is not updated.[/dim]"
@@ -1019,6 +1027,95 @@ def _render_recommendation_queue(
 
 
 # ---------------------------------------------------------------------------
+# Adviser Panel
+# ---------------------------------------------------------------------------
+
+
+def _show_adviser_advice_panel(
+    advice: dict[str, Any],
+    item: dict[str, Any],
+    team_context_info: str,
+    email_count: int,
+) -> Panel:
+    """Build a Rich Panel showing Qwen adviser results."""
+    classification = advice.get("classification", "unknown")
+    classification_colors = {
+        "update": "bold green",
+        "unchanged": "dim",
+        "needs_more_info": "bold yellow",
+        "low_confidence": "bold red",
+    }
+    cls_color = classification_colors.get(classification, "white")
+
+    conf = advice.get("confidence", 0.0)
+    conf_bar = f"[{'green' if conf >= 0.7 else 'yellow' if conf >= 0.4 else 'red'}]{'█' * int(conf * 10)}{'░' * (10 - int(conf * 10))} {conf:.0%}[/]"
+
+    lines: list[str] = [
+        f"[bold cyan]Qwen Adviser Assessment[/bold cyan]",
+        f"[dim]Card: {item.get('title', '')}[/dim]",
+        f"[dim]{team_context_info}[/dim]",
+        f"[dim]Email context: {email_count} email(s)[/dim]",
+        "",
+        f"[bold]Classification:[/bold] [{cls_color}]{classification.upper()}[/{cls_color}]",
+        f"[bold]Confidence:[/bold] {conf_bar}",
+        "",
+        f"[bold]Summary:[/bold] {advice.get('summary', '(none)')}",
+        "",
+    ]
+
+    if advice.get("email_vs_card_assessment"):
+        lines.append(f"[bold]Email vs Card:[/bold] {advice['email_vs_card_assessment']}")
+        lines.append("")
+
+    if advice.get("team_context_assessment"):
+        lines.append(f"[bold]Team ESMI Context:[/bold] {advice['team_context_assessment']}")
+        lines.append("")
+
+    if advice.get("suggested_current_state"):
+        lines.append(f"[bold]Suggested Current State:[/bold]")
+        lines.append(f"  {advice['suggested_current_state']}")
+        lines.append("")
+
+    if advice.get("suggested_next_action"):
+        lines.append(f"[bold]Suggested Next Action:[/bold]")
+        lines.append(f"  {advice['suggested_next_action']}")
+        lines.append("")
+
+    if advice.get("suggested_status"):
+        lines.append(f"[bold]Suggested Status:[/bold] {advice['suggested_status']}")
+
+    if advice.get("suggested_risk"):
+        lines.append(f"[bold]Suggested Risk:[/bold] {advice['suggested_risk']}")
+
+    if advice.get("suggested_lead_owner"):
+        lines.append(f"[bold]Suggested Lead/Owner:[/bold] {advice['suggested_lead_owner']}")
+
+    if advice.get("review_comment"):
+        lines.append("")
+        lines.append(f"[bold]Review Comment:[/bold] {advice['review_comment']}")
+
+    if advice.get("questions"):
+        lines.append("")
+        lines.append("[bold]Questions:[/bold]")
+        for q in advice["questions"]:
+            lines.append(f"  - {q}")
+
+    if advice.get("evidence_used"):
+        lines.append("")
+        lines.append(f"[bold]Evidence Used:[/bold] {', '.join(advice['evidence_used'][:5])}")
+
+    lines.append("")
+    lines.append("[dim]Local Qwen adviser only. Suggestions are not written to Kanban.[/dim]")
+
+    return Panel(
+        "\n".join(lines),
+        border_style="bright_magenta",
+        padding=(1, 2),
+        title="[bold magenta]Local Qwen Adviser[/bold magenta]",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main TUI Loop
 # ---------------------------------------------------------------------------
 
@@ -1087,6 +1184,13 @@ def run_apply_review_tui(settings: Any, show_filtered: bool = False) -> None:
     # Build card cache
     kanban_root = settings.kanban_local_path()
     card_cache: dict[str, dict[str, Any] | None] = {}
+
+    # Adviser state
+    last_team_poll_result = None
+    last_team_context_hash = ""
+    last_team_context_mtime = ""
+    last_email_context: list[dict[str, Any]] = []
+    last_advice_result: dict[str, Any] | None = None
 
     # Sort items
     sorted_items = _sort_review_items(all_items, decisions)
@@ -1316,6 +1420,255 @@ def run_apply_review_tui(settings: Any, show_filtered: bool = False) -> None:
             _export_markdown_report(plan, sorted_items, decisions, apply_root, out)
             console.print()
             Prompt.ask("Press Enter to return to review", default="")
+
+        elif cmd in ("g", "G"):
+            # ============================================================
+            # G — Ask Qwen Adviser
+            # ============================================================
+            # Safety: block on smoke items
+            if is_smoke:
+                console.print("[red]Cannot use Qwen adviser on filtered smoke/test/demo items.[/red]")
+                Prompt.ask("Press Enter to continue", default="")
+                continue
+
+            # Check if adviser is enabled
+            if not getattr(settings, "ollama_enabled", True):
+                console.print("[yellow]Local Qwen adviser is disabled in settings (ollama_enabled=false).[/yellow]")
+                Prompt.ask("Press Enter to continue", default="")
+                continue
+
+            # Ask operator what they want
+            console.clear()
+            console.print(Panel(
+                "[bold magenta]Local Qwen Adviser[/bold magenta]\n\n"
+                f"Card: {item.get('title', '')}\n\n"
+                "[dim]What do you want Qwen to help with for this card?\n"
+                "Examples:\n"
+                "  'Review this card and recommendation'\n"
+                "  'Check if the emails support the proposed status change'\n"
+                "  'Suggest better wording for current state and next action'\n"
+                "  'Compare the card with the latest emails'\n"
+                "  'Is the next action still accurate?'[/dim]",
+                border_style="magenta",
+                padding=(2, 3),
+            ))
+            operator_request = Prompt.ask("Your question", default="Review this card and recommendation.").strip()
+            if not operator_request:
+                console.print("[yellow]No question entered. Skipping adviser.[/yellow]")
+                Prompt.ask("Press Enter to continue", default="")
+                continue
+
+            # Step 1: Poll Team ESMI
+            console.print("[dim]Polling Team ESMI for latest context...[/dim]")
+            team_status = poll_team_context(settings)
+            last_team_poll_result = team_status
+            team_context_hash = team_status.hash_value if team_status.reachable else ""
+            team_context_mtime = team_status.mtime if team_status.reachable else ""
+            last_team_context_hash = team_context_hash
+            last_team_context_mtime = team_context_mtime
+
+            team_info = ""
+            if team_status.reachable:
+                if team_status.changed_since_last_poll:
+                    team_info = "[bold yellow]Latest Team ESMI card differs from apply-plan snapshot. Qwen will compare against latest Team ESMI context.[/bold yellow]"
+                else:
+                    team_info = f"[dim]Team ESMI: match (hash={team_context_hash[:16]}..., mtime={team_context_mtime[:16]})[/dim]"
+            else:
+                team_info = "[yellow]Team ESMI unavailable. Using local cached context only.[/yellow]"
+
+            # Step 2: Load Team ESMI card
+            team_card = None
+            if team_status.reachable:
+                team_card = load_latest_card_context(
+                    settings,
+                    project_id=item.get("projectId", ""),
+                    project_title=item.get("title", ""),
+                )
+
+            # Step 3: Load email context
+            console.print("[dim]Loading email context...[/dim]")
+            source_keys = item.get("sourceEmailKeys", []) or []
+            evidence_list = item.get("evidence", []) or []
+            email_result = load_email_context(
+                settings,
+                source_email_keys=source_keys,
+                evidence_list=evidence_list,
+                card_title=item.get("title", ""),
+                project_name=item.get("projectId", ""),
+                max_count=getattr(settings, "local_ai_max_email_count", 8),
+                max_chars=getattr(settings, "local_ai_max_email_context_chars", 12000),
+                item=item,
+            )
+            email_context = email_result  # Keep as dict for adviser
+            email_list = email_result.get("emails", [])
+            last_email_context = email_result
+
+            # Build email summary line
+            local_exact = email_result.get("localExactMatches", 0)
+            local_fallback = email_result.get("localFallbackMatches", 0)
+            mailbox_matches = email_result.get("mailboxPreExportMatches", 0)
+            mailbox_provider = email_result.get("mailboxProvider", "disabled")
+            mailbox_used = email_result.get("mailboxSearchUsed", False)
+            search_terms = email_result.get("searchTermsUsed", [])
+
+            email_summary_parts = []
+            if local_exact:
+                email_summary_parts.append(f"Local exact evidence: {local_exact}")
+            if local_fallback:
+                email_summary_parts.append(f"Local fallback matches: {local_fallback}")
+            if mailbox_matches:
+                email_summary_parts.append(f"Pre-export mailbox matches: {mailbox_matches}")
+            if mailbox_used:
+                email_summary_parts.append(f"Provider: {mailbox_provider}")
+            if search_terms:
+                email_summary_parts.append(f"Search terms: {', '.join(search_terms[:5])}")
+
+            if email_summary_parts:
+                # Show the summary via the team_info-style message, merged
+                email_summary_text = " | ".join(email_summary_parts)
+                console.print(f"[dim]{email_summary_text}[/dim]")
+            elif not mailbox_used and getattr(settings, "mailbox_search_enabled", False):
+                console.print("[dim]Pre-export mailbox search unavailable. Continuing with local/card context only.[/dim]")
+            elif not getattr(settings, "mailbox_search_enabled", False):
+                console.print("[dim]Pre-export mailbox search disabled. Using local evidence folder only.[/dim]")
+            else:
+                console.print("[dim]No linked email context found for this card. Qwen will use card/recommendation context only.[/dim]")
+
+            # Step 4: Ask Qwen
+            console.print(f"[dim]Asking Qwen ({settings.ollama_model})...[/dim]")
+            advice_result = ask_adviser(
+                settings,
+                item=item,
+                current_card=current_card,
+                team_card=team_card,
+                email_context=email_context,
+                team_context_hash=team_context_hash,
+                team_context_mtime=team_context_mtime,
+                operator_request=operator_request,
+            )
+            last_advice_result = advice_result
+
+            # Step 5: Display result
+            console.clear()
+            if not advice_result.get("success"):
+                error_msg = advice_result.get("message", "Unknown error")
+                console.print(Panel(
+                    f"[bold red]Qwen Adviser Error[/bold red]\n\n{error_msg}\n\n"
+                    + (
+                        "[dim]Start Ollama and ensure the configured Qwen model is installed.\n"
+                        "Run 'ollama-doctor' or 'local-ai-status' to check.[/dim]"
+                        if "unavailable" in error_msg.lower() or "not reachable" in error_msg.lower()
+                        else ""
+                    ),
+                    border_style="red",
+                    padding=(2, 3),
+                ))
+                if advice_result.get("raw_response"):
+                    console.print(f"\n[dim]Raw response: {advice_result['raw_response'][:500]}[/dim]")
+                Prompt.ask("Press Enter to return to review", default="")
+                continue
+
+            advice = advice_result.get("advice", {})
+            console.print(_show_adviser_advice_panel(advice, item, team_info, len(email_context)))
+            console.print()
+            console.print("[dim]A=Accept into local review log | E=Edit flow (prefilled) | D=Discard | R=Ask/refine again | Q=Back[/dim]")
+            console.print()
+            console.print("[dim]Local Qwen adviser only. Suggestions are not written to Kanban.[/dim]")
+
+            advice_cmd = Prompt.ask("Adviser action", default="q").strip().lower()
+
+            if advice_cmd == "a":
+                # Accept — log to local_ai_update_log.jsonl
+                accept_advice(settings, item, advice)
+                console.print("[green]Suggestion accepted and logged to local_ai_update_log.jsonl.[/green]")
+                console.print("[dim]Accepted fields are recorded in the local review workspace only.[/dim]")
+                Prompt.ask("Press Enter to return to review", default="")
+            elif advice_cmd == "e":
+                # Edit flow — show prompts prefilled with suggestions
+                console.clear()
+                console.print(f"[bold cyan]Edit Card with Qwen Suggestions — {item.get('title', '')}[/bold cyan]")
+                console.print()
+                cs = Prompt.ask("Current State", default=advice.get("suggested_current_state", "") or item.get("approvedCurrentState", "") or current_card.get("context", "") if current_card else "")
+                na = Prompt.ask("Next Action", default=advice.get("suggested_next_action", "") or item.get("approvedNextAction", "") or current_card.get("nextAction", "") if current_card else "")
+                st = Prompt.ask("Status", default=advice.get("suggested_status", "") or item.get("approvedStatus", "") or (current_card.get("status", "") if current_card else ""))
+                rk = Prompt.ask("Risk", default=advice.get("suggested_risk", "") or item.get("approvedRisk", "") or (current_card.get("riskColour", "") if current_card else ""))
+                ldr = Prompt.ask("Lead/Owner", default=advice.get("suggested_lead_owner", "") or current_card.get("projectLead", "") if current_card else "")
+                rc = Prompt.ask("Review Comment", default=advice.get("review_comment", ""))
+                operator_note = Prompt.ask("Operator note (optional)", default="Prefilled from Qwen suggestion")
+
+                # Log accepted fields
+                accepted = {}
+                if cs: accepted["suggestedCurrentState"] = cs
+                if na: accepted["suggestedNextAction"] = na
+                if st: accepted["suggestedStatus"] = st
+                if rk: accepted["suggestedRisk"] = rk
+                if ldr: accepted["suggestedLeadOwner"] = ldr
+                if rc: accepted["reviewComment"] = rc
+
+                accept_advice(settings, item, advice, accepted_fields=accepted, operator_note=operator_note)
+                console.print("[green]Edits accepted and logged to local_ai_update_log.jsonl.[/green]")
+                Prompt.ask("Press Enter to return to review", default="")
+            elif advice_cmd == "d":
+                # Discard
+                reason = Prompt.ask("Reason for discarding (optional)", default="")
+                discard_advice(settings, item, advice, reason=reason)
+                console.print("[yellow]Suggestion discarded.[/yellow]")
+                Prompt.ask("Press Enter to return to review", default="")
+            elif advice_cmd == "r":
+                # Refine — re-ask (loop back to beginning of G flow)
+                # ... will re-display with the prompt below
+                console.print("[dim]Re-asking Qwen with the same request...[/dim]")
+                # We need to repeat the ask. Set a flag and continue
+                operator_request = Prompt.ask("Refine your question", default=operator_request).strip()
+                if not operator_request:
+                    continue
+                # Re-poll Team ESMI
+                team_status = poll_team_context(settings)
+                team_context_hash = team_status.hash_value if team_status.reachable else ""
+                team_context_mtime = team_status.mtime if team_status.reachable else ""
+                team_card = load_latest_card_context(
+                    settings,
+                    project_id=item.get("projectId", ""),
+                    project_title=item.get("title", ""),
+                ) if team_status.reachable else None
+                email_context = load_email_context(
+                    settings,
+                    source_email_keys=source_keys,
+                    evidence_list=evidence_list,
+                    card_title=item.get("title", ""),
+                    project_name=item.get("projectId", ""),
+                    max_count=getattr(settings, "local_ai_max_email_count", 8),
+                    max_chars=getattr(settings, "local_ai_max_email_context_chars", 12000),
+                    item=item,
+                )
+                advice_result = ask_adviser(
+                    settings,
+                    item=item,
+                    current_card=current_card,
+                    team_card=team_card,
+                    email_context=email_context,
+                    team_context_hash=team_context_hash,
+                    team_context_mtime=team_context_mtime,
+                    operator_request=operator_request,
+                )
+                if advice_result.get("success"):
+                    advice = advice_result.get("advice", {})
+                    console.clear()
+                    console.print(_show_adviser_advice_panel(advice, item, team_info, len(email_context)))
+                else:
+                    console.print(f"[red]Qwen error: {advice_result.get('message', '')}[/red]")
+                console.print()
+                console.print("[dim]A=Accept | D=Discard | R=Ask/refine again | Q=Back[/dim]")
+                advice_cmd = Prompt.ask("Adviser action", default="q").strip().lower()
+                if advice_cmd == "a":
+                    accept_advice(settings, item, advice)
+                    console.print("[green]Suggestion accepted.[/green]")
+                    Prompt.ask("Press Enter to return to review", default="")
+                elif advice_cmd == "d":
+                    discard_advice(settings, item, advice)
+                    Prompt.ask("Press Enter to return to review", default="")
+                continue
+            # else Q — back to review
 
         elif cmd in ("q", "quit"):
             console.print("[yellow]Exiting review TUI.[/yellow]")

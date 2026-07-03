@@ -138,6 +138,96 @@ class Settings(BaseModel):
         description="If True, create timestamped backup of Kanban source files before writing.",
     )
 
+    # Phase 5 — Local Qwen AI Adviser
+    ollama_enabled: bool = Field(
+        default=True,
+        description="If True, enable the local Qwen adviser in review-apply-tui.",
+    )
+    ollama_timeout_seconds: int = Field(
+        default=60,
+        description="Timeout for Ollama API calls from the adviser.",
+        ge=10,
+        le=300,
+    )
+    local_ai_email_context_enabled: bool = Field(
+        default=True,
+        description="If True, load email evidence context for Qwen adviser.",
+    )
+    local_ai_max_email_context_chars: int = Field(
+        default=12000,
+        description="Max email body characters to include in adviser prompts.",
+        ge=500,
+        le=100000,
+    )
+    local_ai_max_email_count: int = Field(
+        default=8,
+        description="Max evidence emails to include per adviser query.",
+        ge=1,
+        le=20,
+    )
+    team_esmi_context_poll_enabled: bool = Field(
+        default=True,
+        description="If True, poll Team ESMI for latest context before adviser queries.",
+    )
+    team_esmi_context_poll_seconds: int = Field(
+        default=30,
+        description="Poll interval for Team ESMI context refresh.",
+        ge=5,
+        le=3600,
+    )
+    team_esmi_context_read_only: bool = Field(
+        default=True,
+        description="Safety: Team ESMI polling must be read-only.",
+    )
+    local_ai_update_log_enabled: bool = Field(
+        default=True,
+        description="If True, log accepted adviser suggestions to local_ai_update_log.jsonl.",
+    )
+
+    # Phase 5b — Mailbox search (pre-export)
+    mailbox_search_enabled: bool = Field(
+        default=False,
+        description="If True, search mailbox directly for email evidence before Qwen adviser.",
+    )
+    mailbox_search_provider: str = Field(
+        default="outlook_com",
+        description="Mailbox provider: outlook_com, graph, imap, or disabled.",
+    )
+    mailbox_search_read_only: bool = Field(
+        default=True,
+        description="Safety: mailbox search must be read-only.",
+    )
+    mailbox_search_max_results: int = Field(
+        default=10,
+        description="Max emails to return from mailbox search.",
+        ge=1,
+        le=50,
+    )
+    mailbox_search_recent_days: int = Field(
+        default=180,
+        description="Only search emails within this many days.",
+        ge=1,
+        le=730,
+    )
+    mailbox_search_timeout_seconds: int = Field(
+        default=30,
+        description="Timeout for mailbox search operations.",
+        ge=5,
+        le=120,
+    )
+    mailbox_search_cache_enabled: bool = Field(
+        default=True,
+        description="If True, cache mailbox search results locally.",
+    )
+    mailbox_search_cache_path: str = Field(
+        default="runtime/apply/data/mailbox_search_cache.jsonl",
+        description="Path for mailbox search results cache.",
+    )
+    mailbox_search_snapshot_path: str = Field(
+        default="runtime/apply/data/email_evidence_snapshots.jsonl",
+        description="Path for email evidence snapshots from mailbox search.",
+    )
+
     @field_validator("output_root", "kanban_index_root")
     @classmethod
     def resolve_output_roots(cls, v: str) -> str:
