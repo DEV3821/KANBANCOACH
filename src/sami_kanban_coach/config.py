@@ -228,6 +228,28 @@ class Settings(BaseModel):
         description="Path for email evidence snapshots from mailbox search.",
     )
 
+    # Phase 6A — Mr Kanban local conversational harness
+    allow_local_kanban_apply: bool = Field(
+        default=True,
+        description="Phase 6A only: allow writes to the isolated local sandbox copy.",
+    )
+    kanban_apply_target: str = Field(
+        default="local_sandbox",
+        description="Phase 6A apply target. Must remain local_sandbox.",
+    )
+    local_kanban_sandbox_root: str = Field(
+        default="C:\\Tools\\SAMI Kanban Coach\\runtime\\local_kanban_sandbox",
+        description="Isolated local sandbox for Mr Kanban coach-chat writes.",
+    )
+    team_esmi_write_enabled: bool = Field(
+        default=False,
+        description="Safety: Team ESMI writes remain disabled in Phase 6A.",
+    )
+    mailbox_write_enabled: bool = Field(
+        default=False,
+        description="Safety: mailbox writes are impossible in Phase 6A.",
+    )
+
     @field_validator("output_root", "kanban_index_root")
     @classmethod
     def resolve_output_roots(cls, v: str) -> str:

@@ -3192,6 +3192,28 @@ def evidence_regression_test():
         raise typer.Exit(1)
 
 
+@app.command(name="coach-chat")
+def coach_chat(
+    smoke_test: bool = typer.Option(False, "--smoke-test", help="Run deterministic Mr Kanban local sandbox smoke flow."),
+):
+    """Mr Kanban local conversational coach harness (local sandbox only)."""
+    from .coach_chat import interactive_loop, run_smoke_test
+
+    _, settings = _load_settings()
+    if smoke_test:
+        result = run_smoke_test(settings, console=console)
+        console.print("\n[bold green]Mr Kanban smoke test complete.[/bold green]")
+        console.print(f"  Sandbox path: {result.get('sandbox', {}).get('sandboxPath', '')}")
+        console.print(f"  Model reachable: {result.get('model', {}).get('available', False)}")
+        mailbox = result.get("mailbox", {}) or {}
+        inbox_info = mailbox.get("inbox_info", {}) or {}
+        console.print(f"  Mailbox search used: {bool(mailbox.get('enabled', False)) and bool(mailbox.get('available', False))}")
+        console.print(f"  Mailbox search status: {inbox_info.get('search_status', mailbox.get('error', ''))}")
+        console.print(f"  Sources: {len(result.get('sources', []))}")
+        return
+    interactive_loop(settings, console=console)
+
+
 @app.command(name="evidence-reset-workspace")
 def evidence_reset_workspace(
     confirm: bool = typer.Option(False, "--confirm", help="Confirm reset"),

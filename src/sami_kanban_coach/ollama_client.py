@@ -6,10 +6,61 @@ Uses urllib (stdlib) to avoid adding the `requests` dependency.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
 from typing import Any
+
+
+def _extract_json_object(response_text: str) -> dict[str, Any] | None:
+    """Extract a JSON object from model output, handling Qwen wrappers."""
+    text = re.sub(r"<think>.*?</think>", "", response_text or "", flags=re.IGNORECASE | re.DOTALL).strip()
+    for prefix in ("```json", "```"):
+        if prefix in text:
+            try:
+                candidate = text.split(prefix, 1)[1].split("```", 1)[0].strip()
+                return json.loads(candidate)
+            except (IndexError, json.JSONDecodeError):
+                pass
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = text[start:idx + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    cleaned = re.sub(r",\s*([}\]])", r"\1", candidate)
+                    try:
+                        return json.loads(cleaned)
+                    except json.JSONDecodeError:
+                        return None
+    return None
 
 
 def check_ollama(base_url: str, timeout: int = 5) -> tuple[bool, str, list[str]]:
@@ -87,27 +138,10 @@ def generate(
                 result = json.loads(raw)
                 response_text = result.get("response", "").strip()
 
-                # Parse JSON from response
-                try:
-                    parsed = json.loads(response_text)
+                parsed = _extract_json_object(response_text)
+                if isinstance(parsed, dict):
                     return True, "OK", parsed
-                except json.JSONDecodeError:
-                    # Try to extract JSON from markdown fences
-                    if "```json" in response_text:
-                        json_str = response_text.split("```json")[1].split("```")[0].strip()
-                        try:
-                            parsed = json.loads(json_str)
-                            return True, "Extracted from markdown", parsed
-                        except json.JSONDecodeError:
-                            pass
-                    if "```" in response_text:
-                        json_str = response_text.split("```")[1].split("```")[0].strip()
-                        try:
-                            parsed = json.loads(json_str)
-                            return True, "Extracted from fences", parsed
-                        except json.JSONDecodeError:
-                            pass
-                    return False, f"Invalid JSON response: {response_text[:300]}", None
+                return False, f"Invalid JSON response: {response_text[:300]}", None
 
         except urllib.error.HTTPError as e:
             last_error = f"HTTP {e.code}: {e.reason}"
